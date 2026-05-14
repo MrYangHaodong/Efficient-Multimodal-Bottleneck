@@ -1,0 +1,1282 @@
+"""
+V6 Downsample (opt + batched) — single-variant standalone.
+
+Trimmed-down variant of dual_video_bottleneck_model_topk_v6_standalone.py
+that only supports the configuration:
+
+    sparse_attn_variant = 'opt'    (ProbSparseAttentionOpt, shared key sampling)
+    use_batched_fusion  = True     (BatchedModalityEncoder per-modal encoder +
+                                    SimpleMBTFusionAdaptiveMLPDownsampleBmm fusion)
+
+All other sparse-attn variants (orig, BSA, CABSA, CAFlex) and the non-batched
+fusion path have been deleted. The constructor of
+``DualVideoBottleneckModelV6Downsample`` still accepts ``use_batched_fusion``
+for back-compat but ignores its value (always batched).
+"""
+
+import os
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+from math import sqrt, ceil, log
+from typing import Dict, Optional, Tuple, Union, List
+
+try:
+    from MAESTRO.models.triton_ops import (
+        TritonProbSparseAttention,
+        TRITON_AVAILABLE,
+        triton_fused_add_layernorm,
+    )
+except Exception:
+    TRITON_AVAILABLE = False
+    TritonProbSparseAttention = None
+    triton_fused_add_layernorm = None
+
+# Compile flex_attention once at import time so every call gets the fused kernel.
+# Falls back to the uncompiled version if FlexAttention is unavailable (PyTorch < 2.5).
+try:
+    from torch.nn.attention.flex_attention import flex_attention as _flex_attn_raw, create_block_mask
+    _flex_attn = torch.compile(_flex_attn_raw, dynamic=False)
+    _FLEX_ATTN_OK = True
+except Exception:
+    _flex_attn = None
+    create_block_mask = None
+    _FLEX_ATTN_OK = False
+
+
+# ===================================================================
+# From bottleneck_fusion_adaptive_optimized.py
+# ===================================================================
+
+class ProbSparseAttentionOpt(nn.Module):
+    """Drop-in optimised replacement for ProbSparseAttention.
+
+    Three optimisations vs the original (per-query sampling + manual softmax + clone):
+      1. Shared key sampling — `K_sample` shape goes from
+         [B, H, L, n_bottleneck+U_part, d_h] to [B, H, n_bottleneck+U_part, d_h].
+      2. SDPA (Flash backend) for the dense attention over the top-`u` queries —
+         scores/softmax stay in SRAM, no [B, H, u, L] tensor materialised.
+      3. `scatter_` in place of `clone() + fancy-index assignment` for placing
+         updated rows back into the [B, H, L, d_h] context tensor.
+
+    Bottleneck-aware sampling is preserved: `n_bottleneck` indices are always
+    included in the key sample (head or tail of the sequence depending on
+    `bottleneck_head`); only `U_part` non-bottleneck keys are drawn per
+    forward call (shared across queries).
+
+    sampling_strategy controls how those `U_part` non-bottleneck indices are drawn:
+      'global'             — uniform random over the non-bottleneck range, single
+                             shared set across all queries.
+      'stratified'         — partition the non-bottleneck range into `U_part` equal
+                             bins, draw one index per bin. Single shared set.
+      'stratified_block'   — like 'stratified' but draw `n_blocks` independent sets
+                             (`n_blocks = ceil(L / strat_block_size)`); queries are
+                             partitioned into contiguous blocks of `strat_block_size`
+                             and each block uses its own stratified key set.
+                             strat_block_size=1   → per-query stratified.
+                             strat_block_size>=L  → equivalent to 'stratified'.
+    """
+
+    def __init__(self, d_model, n_heads, dropout=0.1, factor=5, scale=None,
+                 n_bottleneck=16, bottleneck_head=True,
+                 sampling_strategy='global', strat_block_size=8):
+        super().__init__()
+        assert sampling_strategy in ('global', 'stratified', 'stratified_block'), \
+            f"sampling_strategy must be 'global'|'stratified'|'stratified_block', got {sampling_strategy!r}"
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        self.factor = factor
+        self.scale = scale or 1. / sqrt(self.d_head)
+
+        self.q_linear = nn.Linear(d_model, d_model)
+        self.kv_linear = nn.Linear(d_model, 2 * d_model)
+        self.out = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+        self.n_bottleneck = n_bottleneck
+        self.bottleneck_head = bottleneck_head
+        self.sampling_strategy = sampling_strategy
+        self.strat_block_size = max(int(strat_block_size), 1)
+
+        self._record_attention = False
+        self._attention_weights = None
+
+    def _sample_non_bottleneck(self, lo, hi, U_part, device):
+        """Draw U_part indices in [lo, hi) per `self.sampling_strategy`.
+
+        Returns:
+            shared modes ('global', 'stratified'): [U_part]
+            'stratified_block':                    [n_blocks, U_part] (caller handles)
+        """
+        n = hi - lo
+        if self.sampling_strategy == 'stratified':
+            edges = torch.linspace(0, n, U_part + 1, device=device)
+            bin_starts = edges[:-1].long()                        # [U_part]
+            bin_widths = (edges[1:].long() - bin_starts).clamp(min=1)
+            offsets = (torch.rand(U_part, device=device) * bin_widths.float()).long()
+            idx_local = (bin_starts + offsets).clamp(max=n - 1)
+            return lo + idx_local
+        return torch.randint(lo, hi, (U_part,), device=device)
+
+    def _sample_non_bottleneck_blocked(self, lo, hi, n_blocks, U_part, device):
+        """Per-block stratified sampling. Returns [n_blocks, U_part] indices in [lo, hi)."""
+        n = hi - lo
+        edges = torch.linspace(0, n, U_part + 1, device=device)
+        bin_starts = edges[:-1].long()                                            # [U_part]
+        bin_widths = (edges[1:].long() - bin_starts).clamp(min=1)                 # [U_part]
+        offsets = (torch.rand(n_blocks, U_part, device=device)
+                   * bin_widths.float()).long()                                    # [n_blocks, U_part]
+        idx_local = (bin_starts.unsqueeze(0) + offsets).clamp(max=n - 1)
+        return lo + idx_local
+
+    def forward(self, x, factor):
+        B, L, _ = x.size()
+        H, d_h = self.n_heads, self.d_head
+
+        Q = self.q_linear(x).view(B, L, H, d_h).transpose(1, 2)
+        K, V = self.kv_linear(x).chunk(2, dim=-1)
+        K = K.view(B, L, H, d_h).transpose(1, 2)
+        V = V.view(B, L, H, d_h).transpose(1, 2)
+
+        U_part = int(min(factor * ceil(log(L)), L - self.n_bottleneck))
+        U_part = max(U_part, 1)
+        u = int(min(factor * ceil(log(L)), L))
+
+        if self.sampling_strategy == 'stratified_block':
+            # ─── Per-query-block stratified key sampling ───
+            S = self.strat_block_size
+            n_blocks = (L + S - 1) // S
+            if self.n_bottleneck != 0:
+                if self.bottleneck_head:
+                    non_bot = self._sample_non_bottleneck_blocked(
+                        self.n_bottleneck, L, n_blocks, U_part, x.device)
+                    bot = (torch.arange(self.n_bottleneck, device=x.device)
+                           .unsqueeze(0).expand(n_blocks, -1))
+                else:
+                    non_bot = self._sample_non_bottleneck_blocked(
+                        0, L - self.n_bottleneck, n_blocks, U_part, x.device)
+                    bot = (torch.arange(L - self.n_bottleneck, L, device=x.device)
+                           .unsqueeze(0).expand(n_blocks, -1))
+                idx_s = torch.cat([bot, non_bot], dim=1)            # [n_blocks, n_s]
+            else:
+                idx_s = self._sample_non_bottleneck_blocked(0, L, n_blocks, U_part, x.device)
+            n_s = idx_s.shape[1]
+
+            # K_sample: [B,H,n_blocks,n_s,d_h]
+            K_sample = K.index_select(2, idx_s.reshape(-1)).view(B, H, n_blocks, n_s, d_h)
+
+            # Pad-and-reshape Q to block form, then per-block matmul
+            L_pad = n_blocks * S
+            Q_pad = F.pad(Q, (0, 0, 0, L_pad - L)) if L_pad > L else Q
+            Q_blk = Q_pad.view(B, H, n_blocks, S, d_h)
+            QK_samp = torch.matmul(Q_blk, K_sample.transpose(-2, -1))   # [B,H,n_blocks,S,n_s]
+
+            M = QK_samp.max(-1).values - QK_samp.mean(-1)               # [B,H,n_blocks,S]
+            M = M.view(B, H, L_pad)[:, :, :L]
+            _, top_idx = torch.topk(M, u, dim=-1)                       # [B,H,u]
+        else:
+            # ─── Opt 1: shared key sampling (global or stratified) ───
+            if self.n_bottleneck != 0:
+                if self.bottleneck_head:
+                    non_bot = self._sample_non_bottleneck(self.n_bottleneck, L, U_part, x.device)
+                    bot = torch.arange(self.n_bottleneck, device=x.device)
+                else:
+                    non_bot = self._sample_non_bottleneck(0, L - self.n_bottleneck, U_part, x.device)
+                    bot = torch.arange(L - self.n_bottleneck, L, device=x.device)
+                idx_s = torch.cat([bot, non_bot], dim=0)
+            else:
+                idx_s = self._sample_non_bottleneck(0, L, U_part, x.device)
+
+            K_sample = K[:, :, idx_s, :]                                # [B,H,n_s,d_h]
+            QK_samp = torch.matmul(Q, K_sample.transpose(-2, -1))       # [B,H,L,n_s]
+
+            M = QK_samp.max(-1).values - QK_samp.mean(-1)               # [B,H,L]
+            _, top_idx = torch.topk(M, u, dim=-1)                       # [B,H,u]
+
+        top_q = Q.gather(2, top_idx.unsqueeze(-1).expand(-1, -1, -1, d_h))
+
+        # ─── Opt 2: SDPA for the top-u dense attention ───
+        ctx_up = F.scaled_dot_product_attention(top_q, K, V, scale=self.scale)
+
+        if self._record_attention:
+            with torch.no_grad():
+                scores = torch.matmul(top_q, K.transpose(-2, -1)) * self.scale
+                attn = F.softmax(scores, dim=-1)
+                sparse_full = torch.zeros(B, H, L, L, device=x.device)
+                b_idx = torch.arange(B, device=x.device)[:, None, None]
+                h_idx = torch.arange(H, device=x.device)[None, :, None]
+                sparse_full[b_idx, h_idx, top_idx, :] = attn
+                self._attention_weights = sparse_full.mean(dim=1).detach()
+
+        # ─── Opt 3: scatter_ (no clone + no batch/head index tensors) ───
+        context = V.mean(dim=2).unsqueeze(2).expand(-1, -1, L, -1).contiguous()
+        context.scatter_(2, top_idx.unsqueeze(-1).expand(-1, -1, -1, d_h), ctx_up)
+
+        context = context.transpose(1, 2).contiguous().view(B, L, self.d_model)
+        return self.out(context)
+
+
+class SparseMoEFeedForward(nn.Module):
+    """Sparse Mixture of Experts Feed-Forward Layer."""
+
+    def __init__(self, d_model, expert_dim=256, num_experts=4, k=1, log_activations=False):
+        super().__init__()
+        self.num_experts = num_experts
+        self.k = k
+        self.log_activations = log_activations
+        self.logged_expert_ids = []
+
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(d_model, expert_dim),
+                nn.GELU(),
+                nn.Linear(expert_dim, d_model)
+            ) for _ in range(num_experts)
+        ])
+        self.gate = nn.Linear(d_model, num_experts)
+
+    def forward(self, x):
+        B, T, D = x.shape
+        x_flat = x.reshape(B * T, D)
+
+        gate_scores = self.gate(x_flat)
+        topk_scores, topk_indices = torch.topk(gate_scores, self.k, dim=-1)
+        topk_scores = F.softmax(topk_scores, dim=-1)
+
+        if self.log_activations:
+            self.logged_expert_ids.append(topk_indices.detach().cpu())
+
+        all_out = torch.stack([e(x_flat) for e in self.experts], dim=1)
+        idx = topk_indices.unsqueeze(-1).expand(-1, -1, D)
+        chosen = all_out.gather(1, idx)
+        output = (topk_scores.unsqueeze(-1) * chosen).sum(dim=1)
+
+        return output.reshape(B, T, D)
+
+    def get_activation_logs(self):
+        return torch.cat(self.logged_expert_ids, dim=0).numpy() if self.logged_expert_ids else None
+
+
+class TransformerBlock(nn.Module):
+    """Transformer encoder block with self-attention and MLP (dense or sparse MoE)."""
+
+    def __init__(self,
+                 hidden_size: int,
+                 num_heads: int,
+                 mlp_dim: int,
+                 dropout_rate: float = 0.1,
+                 use_sparse_moe: bool = False,
+                 num_experts: int = 4,
+                 expert_k: int = 1,
+                 use_sparse_attn: bool = False,
+                 n_bottleneck: int = 16,
+                 bottleneck_head: bool = True,
+                 factor: int = 5,
+                 use_triton: bool = False,
+                 sparse_attn_variant: str = 'orig',
+                 strat_block_size: int = 8):
+        super().__init__()
+
+        self.use_sparse_moe = use_sparse_moe
+        self.use_sparse_attn = use_sparse_attn
+        self.factor = factor
+        self.use_triton = use_triton and TRITON_AVAILABLE and TritonProbSparseAttention is not None
+        self.sparse_attn_variant = sparse_attn_variant
+
+        self._record_attention = False
+        self._attention_weights = None
+
+        self.ln1 = nn.LayerNorm(hidden_size)
+        if not use_sparse_attn:
+            self.attn = nn.MultiheadAttention(
+                hidden_size,
+                num_heads,
+                dropout=dropout_rate,
+                batch_first=True
+            )
+        elif sparse_attn_variant in ('opt', 'opt_strat', 'opt_strat_blk'):
+            _strategy_map = {
+                'opt':           'global',
+                'opt_strat':     'stratified',
+                'opt_strat_blk': 'stratified_block',
+            }
+            self.attn = ProbSparseAttentionOpt(
+                hidden_size, num_heads, dropout=dropout_rate,
+                factor=factor, n_bottleneck=n_bottleneck,
+                bottleneck_head=bottleneck_head,
+                sampling_strategy=_strategy_map[sparse_attn_variant],
+                strat_block_size=strat_block_size,
+            )
+        else:
+            raise ValueError(
+                f"sparse_attn_variant={sparse_attn_variant!r} not supported in "
+                f"v6_downsample_opt_batched (only 'opt'/'opt_strat'/'opt_strat_blk' "
+                f"or use_triton=True with TRITON available)."
+            )
+        self.dropout1 = nn.Dropout(dropout_rate)
+
+        self.ln2 = nn.LayerNorm(hidden_size)
+        self.self_attn = self.attn
+
+        if use_sparse_moe:
+            self.mlp = SparseMoEFeedForward(
+                d_model=hidden_size,
+                expert_dim=mlp_dim,
+                num_experts=num_experts,
+                k=expert_k,
+                log_activations=False
+            )
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(hidden_size, mlp_dim),
+                nn.GELU(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(mlp_dim, hidden_size),
+                nn.Dropout(dropout_rate)
+            )
+
+    def forward(self, x: torch.Tensor, src_mask: Optional[torch.Tensor] = None,
+                src_key_padding_mask: Optional[torch.Tensor] = None,
+                is_causal: bool = False, factor=None) -> torch.Tensor:
+        residual = x
+        x = self.ln1(x)
+        if not self.use_sparse_attn:
+            x, attn_w = self.attn(x, x, x, attn_mask=src_mask,
+                                  key_padding_mask=src_key_padding_mask,
+                                  need_weights=self._record_attention)
+            if self._record_attention and attn_w is not None:
+                self._attention_weights = attn_w.detach()
+        else:
+            self.attn._record_attention = self._record_attention
+            x = self.attn(x, factor or self.factor)
+            if self._record_attention and self.attn._attention_weights is not None:
+                self._attention_weights = self.attn._attention_weights
+        x = self.dropout1(x)
+
+        if (self.use_triton and triton_fused_add_layernorm is not None
+                and x.is_cuda and x.is_contiguous()):
+            residual, x = triton_fused_add_layernorm(
+                x, residual, self.ln2.weight, self.ln2.bias, self.ln2.eps
+            )
+        else:
+            x = x + residual
+            residual = x
+            x = self.ln2(x)
+
+        x = self.mlp(x)
+        x = x + residual
+        return x
+
+
+# ===================================================================
+# From improved_selector_v2.py  (now in models/v6_selector.py)
+# ===================================================================
+# The selector classes live in their own module so they can evolve
+# independently of the V6 backbone.  Re-export here for back-compat
+# with any code that imports from this file.
+from selector.v6_selector import (
+    ModalityProbeHead,
+    ImprovedModalitySelector,
+    CurriculumScheduler,
+)
+
+
+
+class RoPEPositionalEncoding(nn.Module):
+    """Standalone RoPE positional encoding (batch-first: [B, T, D])."""
+
+    def __init__(self, d_model: int, max_len: int = 500, dropout: float = 0.0,
+                 base: float = 10000.0):
+        super().__init__()
+        assert d_model % 2 == 0, "d_model must be even for RoPE"
+        self.dropout = nn.Dropout(p=dropout)
+
+        inv_freq = 1.0 / (base ** (torch.arange(0, d_model, 2).float() / d_model))
+        self.register_buffer('inv_freq', inv_freq)
+
+        t = torch.arange(max_len, dtype=torch.float)
+        freqs = torch.outer(t, inv_freq)
+        emb = torch.cat([freqs, freqs], dim=-1)
+        self.register_buffer('cos_cache', emb.cos().unsqueeze(0))
+        self.register_buffer('sin_cache', emb.sin().unsqueeze(0))
+
+    @staticmethod
+    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+        d = x.shape[-1] // 2
+        return torch.cat([-x[..., d:], x[..., :d]], dim=-1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T = x.shape[1]
+        cos = self.cos_cache[:, :T, :]
+        sin = self.sin_cache[:, :T, :]
+        return self.dropout(x * cos + self._rotate_half(x) * sin)
+
+
+class BatchedModalityEncoder(nn.Module):
+    """Per-modality encoder that processes M modalities in one batched call.
+
+    Drop-in replacement for the ModuleDict[ModalityEncoder] structure in V5+
+    models when bmm-batched per-modal processing is desired. Holds num_layers
+    `BatchedTransformerBlock`s, each with M_total stacked weight sets — so M
+    modalities run through one batched forward instead of M sequential calls.
+
+    NOTE: when `use_distill=True`, every layer's stride is fixed at construction.
+    The per-layer `skip_ds` short-input safety from `ModalityEncoder` doesn't
+    apply here because BatchedTransformerBlock's conv stride can't be toggled
+    at runtime. Choose `num_layers` such that the input length stays > 1 after
+    halving num_layers times.
+
+    Forward expects a stacked tensor of shape [M_active, B, L, D] and an
+    optional `mod_indices` LongTensor of length M_active selecting which of
+    the M_total stored param sets to use (for top-k modality selection).
+
+    Args:
+        M_total:             total parameter sets stored (= num_modalities)
+        d_model:             feature dim
+        num_layers:          transformer layers (= num_layers_per_modal)
+        nhead:               attention heads
+        dropout:             dropout rate
+        use_sparse_attn:     enable ProbSparse attention (uses BatchedTransformerBlock's
+                             _sparse_attention)
+        n_bottleneck:        bottleneck token count for sparse path (typically 0
+                             for per-modal)
+        factor:              ProbSparse factor
+        sparse_attn_variant: 'orig' / 'opt' / 'opt_strat'
+        use_distill:         per-layer stride-2 conv+pool downsample
+    """
+
+    def __init__(self, M_total: int, d_model: int, num_layers: int = 2,
+                 nhead: int = 8, dropout: float = 0.1,
+                 use_sparse_attn: bool = False, n_bottleneck: int = 0,
+                 factor: int = 5, sparse_attn_variant: str = 'orig',
+                 use_distill: bool = False,
+                 strat_block_size: int = 8):
+        super().__init__()
+        # Lazy import to avoid circular dependency
+        from multimodal_model.fusion_bmm_parallel import BatchedTransformerBlock
+        self.use_distill = use_distill
+        self.M_total = M_total
+        _strategy_map = {
+            'opt_strat':     'stratified',
+            'opt_strat_blk': 'stratified_block',
+        }
+        sampling_strategy = _strategy_map.get(sparse_attn_variant, 'global')
+        self.layers = nn.ModuleList([
+            BatchedTransformerBlock(
+                M_total=M_total, hidden_size=d_model, num_heads=nhead,
+                mlp_dim=int(d_model * 2.0), dropout_rate=dropout,
+                use_distill=use_distill,
+                use_sparse_attn=use_sparse_attn,
+                factor=factor,
+                n_bottleneck=n_bottleneck,
+                bottleneck_head=True,
+                sampling_strategy=sampling_strategy,
+                strat_block_size=strat_block_size,
+            )
+            for _ in range(num_layers)
+        ])
+
+    def forward(self, x_stacked: torch.Tensor,
+                mod_indices: Optional[torch.Tensor] = None,
+                factor=None) -> torch.Tensor:
+        """
+        Args:
+            x_stacked: [M_active, B, L, D]
+            mod_indices: optional LongTensor [M_active], indices into M_total stored
+                         param sets. None means use all M_total in original order.
+        Returns:
+            [M_active, B, L_out, D] — L_out = L // 2^num_layers when use_distill,
+                                       else L_out = L.
+        """
+        del factor  # BatchedTransformerBlock doesn't take a factor arg in fwd
+        for layer in self.layers:
+            x_stacked = layer(x_stacked, mod_indices)
+        return x_stacked
+
+
+def _save_attention_heatmap_grid(attention_maps: Dict[str, torch.Tensor],
+                                 save_path: str,
+                                 modalities: List[str],
+                                 num_layers: int,
+                                 title: str = "MBT Fusion Attention Heatmaps"):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    n_rows, n_cols = len(modalities), num_layers
+    fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols,
+                             figsize=(3.5 * n_cols, 3 * n_rows), squeeze=False)
+    fig.suptitle(title, fontsize=14, fontweight='bold', y=1.02)
+
+    for row, modality in enumerate(modalities):
+        for col in range(n_cols):
+            ax = axes[row][col]
+            key = f'{modality}_layer_{col}'
+            if key in attention_maps:
+                attn = attention_maps[key]
+                if attn.dim() == 4:
+                    attn = attn.mean(dim=(0, 1))
+                elif attn.dim() == 3:
+                    attn = attn.mean(dim=0)
+                im = ax.imshow(attn.cpu().float().numpy(), aspect='auto',
+                               cmap='viridis', interpolation='nearest')
+                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            else:
+                ax.text(0.5, 0.5, 'N/A', transform=ax.transAxes,
+                        ha='center', va='center', fontsize=14, color='gray')
+            ax.set_title(f'{modality} / Layer {col}', fontsize=9)
+            if col == 0:
+                ax.set_ylabel('Query', fontsize=8)
+            if row == n_rows - 1:
+                ax.set_xlabel('Key', fontsize=8)
+            ax.tick_params(labelsize=6)
+
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Attention heatmaps saved to {save_path}")
+
+
+class BottleneckMLPAggregatorDownsample(nn.Module):
+    """
+    M × [B, K//2, d]
+      → gate-weighted sum over M  → [B, K//2, d]
+      → learned upsample K//2 → K → [B, K,   d]
+
+    The upsample (nn.Linear on the sequence dim) restores the bottleneck to
+    full K tokens so the next fusion layer always receives K bottleneck inputs.
+    """
+
+    def __init__(self, d_model: int, k_bottleneck: int, dropout: float = 0.1):
+        super().__init__()
+        assert k_bottleneck % 2 == 0, "n_bottlenecks must be even for K//2 split"
+        self.k_bottleneck = k_bottleneck
+        self.k_half = k_bottleneck // 2
+        self.gate     = nn.Linear(d_model, 1)
+        self.dropout  = nn.Dropout(dropout)
+        self.norm     = nn.LayerNorm(d_model)
+        self.upsample = nn.Linear(self.k_half, k_bottleneck)
+
+    def forward(self, bottleneck_list: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Args:
+            bottleneck_list: M tensors of shape [B, K_in, d]. Typically K_in == K//2
+                (after a fusion-distill layer halves the sequence). When the caller
+                hits a non-halving path (block stride=1, or short-T skip), K_in == K
+                and the upsample is bypassed.
+        Returns:
+            [B, K, d]
+        """
+        tokens = torch.stack(bottleneck_list, dim=1)           # [B, M, K_in, d]
+        gates  = F.softmax(self.gate(tokens), dim=1)           # [B, M, K_in, 1]
+        fused  = (gates * tokens).sum(dim=1)                   # [B, K_in, d]
+        fused  = self.dropout(fused)
+        # Apply upsample only when input came from a halved layer (K_in == K//2)
+        if fused.shape[1] == self.k_half:
+            fused = self.upsample(fused.transpose(1, 2)).transpose(1, 2)
+        return self.norm(fused)
+
+
+class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
+    """V6Downsample fusion with bmm-batched parallelism across modalities.
+
+    Mirrors `SimpleMBTFusionAdaptiveMLPDownsample` (per-modality split +
+    `BottleneckMLPAggregatorDownsample` upsample) but the per-modality
+    `TransformerBlockDS` is replaced with a single `BatchedTransformerBlock`
+    per fusion layer that processes all M modalities in one batched forward.
+
+    Per fusion layer:
+      1. Stack [M, B, T+K, d]
+      2. Run BatchedTransformerBlock(use_distill=True) → halves seq → [M, B, (T+K)//2, d]
+      3. Split last k_half as compressed bottleneck per modality → list of M × [B, K//2, d]
+      4. BottleneckMLPAggregatorDownsample: gate-aggregate + Linear upsample → [B, K, d]
+
+    Supports both dense and sparse attention (`use_sparse_attn` +
+    `sparse_attn_variant`) by delegating to BatchedTransformerBlock's
+    `_attention` / `_sparse_attention` paths.
+    """
+
+    def __init__(self, input_dims: Dict[str, int],
+                 hidden_size: int = 512, num_layers: int = 6,
+                 num_heads: int = 8, mlp_dim: int = 2048,
+                 fusion_layer: int = 3, use_bottleneck: bool = True,
+                 n_bottlenecks: int = 4, dropout_rate: float = 0.1,
+                 output_dim: Optional[int] = None,
+                 bottleneck_head_pos: bool = False,
+                 max_seq_len: int = 500,
+                 use_sparse_attn: bool = False,
+                 use_sparse_moe: bool = False,
+                 use_triton: bool = False,
+                 num_experts: int = 4, expert_k: int = 1,
+                 parallel_modalities: bool = False,
+                 factor: int = 5,
+                 sparse_attn_variant: str = 'orig',
+                 downsample_min_len: int = 4,
+                 strat_block_size: int = 8,
+                 **_unused_kwargs):
+        super().__init__()
+        if use_sparse_moe:
+            raise NotImplementedError('No MoE in the bmm path.')
+        if use_triton:
+            raise NotImplementedError('Triton not compatible with batched LN.')
+        assert n_bottlenecks % 2 == 0, 'n_bottlenecks must be even for K//2 split'
+
+        # Lazy import to avoid circular dependency
+        from multimodal_model.fusion_bmm_parallel import BatchedTransformerBlock
+
+        self.all_modalities: List[str] = list(input_dims.keys())
+        self.M_total = len(self.all_modalities)
+        self.modality_to_idx = {m: i for i, m in enumerate(self.all_modalities)}
+        self.hidden_size = hidden_size
+        self.output_dim = output_dim if output_dim is not None else hidden_size
+        self.use_bottleneck = use_bottleneck
+        self.n_bottlenecks = n_bottlenecks
+        self.k_half = n_bottlenecks // 2
+        self.bottleneck_head_pos = bottleneck_head_pos
+        self.num_layers = num_layers
+        self.fusion_layer = fusion_layer
+        self.downsample_min_len = downsample_min_len
+        self.use_sparse_attn = use_sparse_attn
+        self.sparse_attn_variant = sparse_attn_variant
+
+        # Per-modality input projections (independent, small cost)
+        self.input_projections = nn.ModuleDict()
+        for modality, in_dim in input_dims.items():
+            if in_dim != hidden_size:
+                self.input_projections[modality] = nn.Linear(in_dim, hidden_size)
+            else:
+                self.input_projections[modality] = nn.Identity()
+
+        # Pre-fusion blocks (lyr < fusion_layer): no downsample, no bottleneck
+        # Fusion blocks (lyr >= fusion_layer): use_distill=True (stride=2 conv+pool)
+        _strategy_map = {
+            'opt_strat':     'stratified',
+            'opt_strat_blk': 'stratified_block',
+        }
+        sampling_strategy = _strategy_map.get(sparse_attn_variant, 'global')
+        self.blocks = nn.ModuleList([
+            BatchedTransformerBlock(
+                M_total=self.M_total, hidden_size=hidden_size,
+                num_heads=num_heads, mlp_dim=mlp_dim,
+                dropout_rate=dropout_rate,
+                use_distill=(lyr >= fusion_layer),
+                use_sparse_attn=use_sparse_attn,
+                factor=factor,
+                n_bottleneck=n_bottlenecks if use_bottleneck else 0,
+                bottleneck_head=bottleneck_head_pos,
+                sampling_strategy=sampling_strategy,
+                strat_block_size=strat_block_size,
+            )
+            for lyr in range(num_layers)
+        ])
+
+        if use_bottleneck:
+            self.bottleneck = nn.Parameter(
+                torch.randn(1, n_bottlenecks, hidden_size) * 0.02
+            )
+            # K//2 → K via Linear upsample
+            self.bottleneck_aggregator = BottleneckMLPAggregatorDownsample(
+                d_model=hidden_size,
+                k_bottleneck=n_bottlenecks,
+                dropout=dropout_rate,
+            )
+        else:
+            self.bottleneck = None
+            self.bottleneck_aggregator = None
+
+        self.final_norm = nn.LayerNorm(hidden_size)
+        if self.output_dim != hidden_size:
+            self.output_projection = nn.Linear(hidden_size, self.output_dim)
+        else:
+            self.output_projection = nn.Identity()
+
+    def _stack_inputs(self, inputs, available_modalities):
+        # Project each modality and stack to [M_active, B, L, H]
+        return torch.stack(
+            [self.input_projections[m](inputs[m]) for m in available_modalities],
+            dim=0,
+        )
+
+    def forward(self, inputs: Dict[str, torch.Tensor],
+                return_tokens: bool = False, factor=None):
+        del factor
+        available_modalities = [m for m in self.all_modalities if m in inputs]
+        if len(available_modalities) == 0:
+            raise ValueError('At least one modality must be provided')
+
+        device = inputs[available_modalities[0]].device
+        batch_size = inputs[available_modalities[0]].shape[0]
+        M_active = len(available_modalities)
+        full = (M_active == self.M_total
+                and available_modalities == self.all_modalities)
+        mod_indices = (None if full else torch.tensor(
+            [self.modality_to_idx[m] for m in available_modalities],
+            dtype=torch.long, device=device,
+        ))
+
+        x = self._stack_inputs(inputs, available_modalities)        # [M, B, L, H]
+
+        if self.use_bottleneck and self.bottleneck is not None:
+            bottleneck = self.bottleneck.expand(batch_size, -1, -1).contiguous()
+        else:
+            bottleneck = None
+
+        for lyr in range(self.num_layers):
+            block = self.blocks[lyr]
+            if lyr < self.fusion_layer:
+                # Pre-fusion: independent per modality (no bottleneck cat)
+                x = block(x, mod_indices)
+                continue
+
+            if bottleneck is None:
+                # Fallback: cat-along-seq path (no bottleneck)
+                M, B, L, H = x.shape
+                x_cat = x.permute(1, 0, 2, 3).reshape(B, M * L, H).unsqueeze(0)
+                idx = (mod_indices[:1] if mod_indices is not None
+                       else torch.zeros(1, dtype=torch.long, device=device))
+                x_cat = block(x_cat, idx).squeeze(0)
+                x = x_cat.reshape(B, M, -1, H).permute(1, 0, 2, 3).contiguous()
+                continue
+
+            T = x.shape[2]
+            bn_len = bottleneck.shape[1]
+
+            # Stack bottleneck across modalities then concat along seq dim
+            bn_stack = bottleneck.unsqueeze(0).expand(M_active, -1, -1, -1)
+            if not self.bottleneck_head_pos:
+                combined = torch.cat([x, bn_stack], dim=2)          # [M, B, T+K, H]
+            else:
+                combined = torch.cat([bn_stack, x], dim=2)
+
+            # Run batched block. Note: the block's stride is FIXED at construction
+            # to use_distill=(lyr >= fusion_layer). The downsample_min_len threshold
+            # cannot toggle stride at runtime; instead we detect halving from L_out.
+            out = block(combined, mod_indices)                      # [M, B, L_out, H]
+            L_out = out.shape[2]
+            block_halved = (lyr >= self.fusion_layer)               # block was built with stride=2
+
+            # New ds_module trims odd L before halving (mirrors seq's _DualPathDownsample),
+            # so expected halved length is integer-division: (T+bn_len)//2.
+            if block_halved and L_out == (T + bn_len) // 2:
+                # Halved path: block produced the expected half-length output.
+                # Split: k_half tokens at the bottleneck end → aggregator upsamples
+                # back to K so the next layer receives K-token bottleneck.
+                k_half = self.k_half
+                if not self.bottleneck_head_pos:
+                    new_bn_list = [out[i, :, -k_half:, :] for i in range(M_active)]
+                    x = out[:, :, :-k_half, :]
+                else:
+                    new_bn_list = [out[i, :, :k_half, :] for i in range(M_active)]
+                    x = out[:, :, k_half:, :]
+                bottleneck = self.bottleneck_aggregator(new_bn_list)  # [B, K, H] via upsample
+            else:
+                # Non-halved path (block stride=1, or unexpected L_out). Slice the
+                # full original bn_len; aggregator detects width != k_half and
+                # passes through without upsample.
+                if not self.bottleneck_head_pos:
+                    new_bn_list = [out[i, :, T:T + bn_len, :] for i in range(M_active)]
+                    x = out[:, :, :T, :]
+                else:
+                    new_bn_list = [out[i, :, :bn_len, :] for i in range(M_active)]
+                    x = out[:, :, bn_len:, :]
+                bottleneck = self.bottleneck_aggregator(new_bn_list)
+
+        # Concat modalities along sequence dim, GAP for readout
+        M_active_, B_, L_, H_ = x.shape
+        fused_tokens = x.permute(1, 0, 2, 3).reshape(B_, M_active_ * L_, H_)
+        fused_tokens = self.final_norm(fused_tokens)
+        if return_tokens:
+            return fused_tokens
+        fused_repr = fused_tokens.mean(dim=1)
+        return self.output_projection(fused_repr)
+
+
+class DualVideoBottleneckModelV6Downsample(nn.Module):
+    """
+    V6 model with Conv1d+MaxPool downsampling at each MBT fusion layer.
+
+    Flat standalone class (no parent class beyond nn.Module). The bottleneck
+    fusion module is SimpleMBTFusionAdaptiveMLPDownsampleBmm:
+
+      - Each fusion layer runs a dedicated Conv1d(k=3)+GELU+MaxPool(stride=2)
+        on the full concatenated [modality|bottleneck] output sequence.
+      - Modality tokens halve in length each fusion layer.
+      - Bottleneck tokens are compressed to K//2 per modality, fed into
+        BottleneckMLPAggregatorDownsample, then upsampled back to K — so the
+        bottleneck input to every layer is always the full K tokens.
+
+    Per-modality encoding uses BatchedModalityEncoder (bmm-batched across the
+    M modalities).  Improved selector (`ImprovedModalitySelector`) is built
+    when `no_selector=False`; otherwise modalities are weighted uniformly.
+
+    Forward returns:
+        labels=None:  (output, primary_idx, modality_weights, selected_modalities)
+        labels given: (output, primary_idx, modality_weights, selected_modalities, aux_losses)
+
+    Notes:
+        downsample_min_len (int, default 4): skip modality downsampling when the
+            modality sequence length is at or below this threshold.
+        n_bottlenecks must be even.
+        use_batched_fusion is accepted for back-compat but ignored — this
+            variant always uses the batched path.
+    """
+
+    def __init__(self, cfg, output_dim=1, input_length=45, d_model=384, nhead=16,
+                 num_layers_per_modal=2, num_layers=2, dropout=0.1, verbose=True,
+                 video_low_dim=384, video_high_dim=1024,
+                 use_bottleneck=True, use_sparse_attn=False, n_bottlenecks=4, fusion_layer=1,
+                 use_sparse_moe=False, num_experts=4, expert_k=1,
+                 factor=5, internal_dim=768, bottleneck_head_pos=False,
+                 mselector_mlp_hidden_dim=128,
+                 top_k=None,
+                 use_weighted_factor=False,
+                 selector_video_source='low',
+                 encoder_video_source='high',
+                 no_selector=False,
+                 use_triton=False,
+                 num_classes=5,
+                 lambda_probe=0.1,
+                 lambda_diversity=0.01,
+                 lambda_reinforce=0.01,
+                 lambda_sparsity=0.1,
+                 downsample_min_len=4,
+                 sparse_attn_variant='orig',
+                 strat_block_size: int = 8,
+                 use_batched_fusion=False,
+                 per_modal_distill: bool = False,
+                 per_modal_downsample_min_len: int = 4,
+                 use_interaction_matrix: bool = True,
+                 use_holo_bias: bool = False,
+                 holo_scale: float = 1.0,
+                 ):
+        super().__init__()
+
+        assert selector_video_source in ('low', 'high'), \
+            f"selector_video_source must be 'low' or 'high', got '{selector_video_source}'"
+        assert encoder_video_source in ('low', 'high'), \
+            f"encoder_video_source must be 'low' or 'high', got '{encoder_video_source}'"
+
+        n_mods = len(cfg.modalities) if hasattr(cfg, 'modalities') else 3
+        assert top_k is None or (isinstance(top_k, int) and 1 <= top_k <= n_mods), \
+            f"top_k must be None or an int in [1, {n_mods}], got {top_k}"
+
+        self.top_k = top_k
+        self.use_weighted_factor = use_weighted_factor
+        self.no_selector = no_selector
+        self.video_low_dim = video_low_dim
+        self.video_high_dim = video_high_dim
+        self.selector_video_source = selector_video_source
+        self.encoder_video_source = encoder_video_source
+        self.lambda_probe = lambda_probe
+        self.lambda_diversity = lambda_diversity
+        self.lambda_reinforce = lambda_reinforce
+        self.lambda_sparsity = lambda_sparsity
+        self.sparse_attn_variant = sparse_attn_variant
+        self.strat_block_size = strat_block_size
+
+        self.selector_video_dim = video_low_dim if selector_video_source == 'low' else video_high_dim
+        self.encoder_video_dim = video_low_dim if encoder_video_source == 'low' else video_high_dim
+
+        self.modalities = cfg.modalities if hasattr(cfg, 'modalities') else ['video', 'audio', 'eeg']
+        self.num_modalities = len(self.modalities)
+        self.variates = cfg.variates if hasattr(cfg, 'variates') else {
+            'audio': 768, 'video': video_high_dim, 'eeg': 30
+        }
+        self.variates['video'] = self.encoder_video_dim
+
+        self.input_length = input_length
+        self.verbose = verbose
+        self.d_model = d_model
+        self.fc_dim = d_model
+        self.bottleneck_head_pos = bottleneck_head_pos
+        self.factor = factor
+        self.internal_dim = internal_dim
+        self.pooled_dim = internal_dim
+        self.per_modal_distill = per_modal_distill
+        self.per_modal_downsample_min_len = per_modal_downsample_min_len
+
+        # `use_batched_fusion` is accepted for back-compat but ignored: this
+        # variant is hard-coded to the batched path.
+        self.use_batched_fusion = True
+
+        # ---- Per-modality input projection
+        self.temporal_pos_encoder = RoPEPositionalEncoding(
+            d_model=self.pooled_dim, max_len=input_length)
+
+        self.input_projectors = nn.ModuleDict()
+        for modality in self.modalities:
+            input_dim = self.variates.get(modality, 768)
+            self.input_projectors[modality] = nn.Linear(input_dim, self.internal_dim)
+
+        # ---- Improved modality selector
+        self.selector_dim_dict = {}
+        for m in self.modalities:
+            self.selector_dim_dict[m] = (
+                self.selector_video_dim if m == 'video' else self.variates.get(m, 256)
+            )
+
+        if not no_selector:
+            self.modality_selector = ImprovedModalitySelector(
+                modalities=self.modalities,
+                low_dim_dict=self.selector_dim_dict,
+                mlp_hidden_dim=mselector_mlp_hidden_dim,
+                num_classes=num_classes,
+                uniform_dim=256,
+                use_interaction_matrix=use_interaction_matrix,
+                use_holo_bias=use_holo_bias,
+                holo_scale=holo_scale,
+            )
+        else:
+            self.modality_selector = None
+
+        # ---- Per-modality pre/post processing modules
+        self.temporal_summarization = nn.ModuleDict()
+        for modality in self.modalities:
+            self.temporal_summarization[modality] = nn.Sequential(
+                nn.Conv1d(self.internal_dim, self.internal_dim, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Dropout(p=dropout),
+            )
+
+        self.layer_norms = nn.ModuleDict({
+            m: nn.LayerNorm(self.internal_dim) for m in self.modalities
+        })
+        self.output_norms = nn.ModuleDict({
+            m: nn.LayerNorm(self.pooled_dim) for m in self.modalities
+        })
+        self.encoder_output_dropout = nn.Dropout(p=min(dropout * 2, 0.3))
+
+        # Kept as an empty ModuleDict for state_dict / iteration back-compat.
+        # The per-modality ModalityEncoder of the original parent has been
+        # replaced by the batched encoder below.
+        self.modality_encoders = nn.ModuleDict()
+
+        # ---- Batched per-modality encoder (replaces parent's per-modal dict)
+        self.batched_modality_encoder = BatchedModalityEncoder(
+            M_total=self.num_modalities,
+            d_model=self.pooled_dim,
+            num_layers=num_layers_per_modal,
+            nhead=nhead,
+            dropout=dropout,
+            use_sparse_attn=False,  # per-modal encoder kept dense in this variant
+            n_bottleneck=0,
+            factor=factor,
+            sparse_attn_variant=sparse_attn_variant,
+            strat_block_size=strat_block_size,
+            use_distill=per_modal_distill,
+        )
+
+        # ---- Bottleneck fusion (V6Downsample bmm fusion)
+        fusion_input_dims = {m: self.pooled_dim for m in self.modalities}
+        self.bottleneck_fusion = SimpleMBTFusionAdaptiveMLPDownsampleBmm(
+            input_dims=fusion_input_dims,
+            hidden_size=d_model,
+            num_layers=num_layers,
+            num_heads=nhead,
+            mlp_dim=int(d_model * 2.0),
+            fusion_layer=fusion_layer,
+            use_bottleneck=use_bottleneck,
+            n_bottlenecks=n_bottlenecks,
+            dropout_rate=dropout,
+            output_dim=d_model,
+            use_sparse_moe=use_sparse_moe,
+            use_sparse_attn=use_sparse_attn,
+            num_experts=num_experts,
+            expert_k=expert_k,
+            bottleneck_head_pos=bottleneck_head_pos,
+            factor=factor,
+            use_triton=use_triton,
+            downsample_min_len=downsample_min_len,
+            sparse_attn_variant=sparse_attn_variant,
+            strat_block_size=strat_block_size,
+        )
+
+        # ---- Classifier head
+        self.regressor = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, output_dim),
+        )
+
+        if verbose:
+            n_fusion = num_layers - fusion_layer
+            print(f"Initializing DualVideoBottleneckModelV6Downsample")
+            print(f"  Modalities:    {self.modalities}")
+            print(f"  Video low-dim: {video_low_dim}, Video high-dim: {video_high_dim}")
+            print(f"  Selector video source: {selector_video_source} (dim={self.selector_video_dim})")
+            print(f"  Encoder video source:  {encoder_video_source} (dim={self.encoder_video_dim})")
+            print(f"  Internal dim: {self.internal_dim}, Pooled dim: {self.pooled_dim}")
+            print(f"  n_bottlenecks: {n_bottlenecks}  k_half: {n_bottlenecks // 2}")
+            print(f"  Fusion layers: {n_fusion}  (each has independent Conv1d+MaxPool)")
+            print(f"  Modality tokens halve each fusion layer  "
+                  f"(min_len={downsample_min_len})")
+            print(f"  Bottleneck: K//2 per modality → aggregator → upsample → K={n_bottlenecks}")
+            print(f"  Per-modal distill: {per_modal_distill}")
+            print(f"  Sparse attn variant: {sparse_attn_variant}  "
+                  f"use_weighted_factor: {use_weighted_factor}")
+            print(f"  use_triton: {use_triton}")
+            print(f"  Batched fusion: True  (per-modal encoder also batched: True)")
+            if self.modality_selector is not None:
+                print(f"  ImprovedModalitySelector: dim_dict={self.selector_dim_dict}")
+                print(f"    num_classes={num_classes}, mlp_hidden={mselector_mlp_hidden_dim}")
+                print(f"    use_interaction_matrix={use_interaction_matrix}  "
+                      f"use_holo_bias={use_holo_bias}  holo_scale={holo_scale}")
+                if top_k is not None:
+                    print(f"    Hard top-K: top_k={top_k}")
+                else:
+                    print(f"    Selection disabled (all modalities kept)")
+            else:
+                print(f"  No modality selector: all modalities used, uniform weights")
+            print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
+
+    # ------------------------------------------------------------------
+    # Selector freeze/unfreeze utilities
+    # ------------------------------------------------------------------
+    def freeze_selector(self, keep_probes_training: bool = True):
+        if self.modality_selector is None:
+            return
+        for name, p in self.modality_selector.named_parameters():
+            if keep_probes_training and 'probe_head' in name:
+                p.requires_grad = True
+            else:
+                p.requires_grad = False
+
+    def unfreeze_selector(self):
+        if self.modality_selector is None:
+            return
+        for p in self.modality_selector.parameters():
+            p.requires_grad = True
+
+    # ------------------------------------------------------------------
+    # Attention recording / heatmap utilities
+    # ------------------------------------------------------------------
+    def enable_attention_recording(self, enable: bool = True,
+                                   layers: Optional[List[int]] = None):
+        # SimpleMBTFusionAdaptiveMLPDownsampleBmm uses BatchedTransformerBlock
+        # which does not expose the same enable_attention_recording API, so
+        # this is a no-op for the bmm path. Kept for API back-compat.
+        fusion = self.bottleneck_fusion
+        if hasattr(fusion, 'enable_attention_recording'):
+            fusion.enable_attention_recording(enable, layers)
+
+    def save_attention_heatmaps(self, save_path: str,
+                                title: str = "MBT Fusion Attention Heatmaps"):
+        fusion = self.bottleneck_fusion
+        if not hasattr(fusion, 'get_attention_maps'):
+            print("Warning: bottleneck_fusion does not support attention recording.")
+            return
+        attention_maps = fusion.get_attention_maps()
+        if not attention_maps:
+            print("Warning: No attention maps recorded.")
+            return
+        available_modalities, recorded_layers = [], set()
+        for key in attention_maps:
+            parts = key.split('_layer_')
+            modality = parts[0]
+            if modality not in available_modalities:
+                available_modalities.append(modality)
+            recorded_layers.add(int(parts[1]))
+        num_layers = max(recorded_layers) + 1 if recorded_layers else 0
+        _save_attention_heatmap_grid(
+            attention_maps, save_path, available_modalities, num_layers, title
+        )
+        if hasattr(fusion, 'clear_attention_maps'):
+            fusion.clear_attention_maps()
+
+    # ------------------------------------------------------------------
+    # Batched per-modality encoding (single batched call across modalities)
+    # ------------------------------------------------------------------
+    def _encode_modalities(self, projected_features, selected_modalities, base_factor):
+        """Encode all modalities in one batched forward via BatchedModalityEncoder.
+
+        Per-modality preprocessing (interpolate / layer_norm / temporal_pos_encoder)
+        and post-processing (output_norm / encoder_output_dropout) still run in
+        a Python loop because they are cheap pointwise ops with per-modality
+        ModuleDict weights — only the heavy transformer-encoder body is batched.
+        """
+        # Determine the active modality order (same iteration order as parent)
+        active_mods = []
+        for modality in self.modalities:
+            if modality not in projected_features:
+                continue
+            if selected_modalities is not None and modality not in selected_modalities:
+                continue
+            active_mods.append(modality)
+        if not active_mods:
+            return {}
+
+        # ---- Per-modality preprocessing (interpolate, layer_norm, temporal_pos)
+        pre_outputs = []
+        for modality in active_mods:
+            x = projected_features[modality]
+            x = x.permute(0, 2, 1)
+            if x.shape[2] > self.input_length:
+                x = F.interpolate(x, size=self.input_length, mode='linear',
+                                  align_corners=False)
+            x = x.permute(0, 2, 1)
+            x = self.layer_norms[modality](x)
+            x = self.temporal_pos_encoder(x)
+            pre_outputs.append(x)
+
+        # ---- Stack to [M_active, B, T, D] and run batched encoder
+        x_stacked = torch.stack(pre_outputs, dim=0)
+        # mod_indices selects which of M_total stored weight sets to use
+        if len(active_mods) == self.num_modalities and active_mods == self.modalities:
+            mod_indices = None
+        else:
+            mod_indices = torch.tensor(
+                [self.modalities.index(m) for m in active_mods],
+                dtype=torch.long, device=x_stacked.device,
+            )
+        x_stacked = self.batched_modality_encoder(x_stacked, mod_indices=mod_indices)
+
+        # ---- Per-modality post-processing (output_norm, dropout)
+        processed = {}
+        for i, modality in enumerate(active_mods):
+            y = x_stacked[i]
+            y = self.output_norms[modality](y)
+            y = self.encoder_output_dropout(y)
+            processed[modality] = y
+        return processed
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+    def forward(self, high_dim_inputs, low_dim_inputs, training=True,
+                factor=None, return_selection_info=True, labels=None,
+                override_selected_modalities=None):
+        selector_video_dict = (low_dim_inputs if self.selector_video_source == 'low'
+                               else high_dim_inputs)
+        encoder_video_dict = (low_dim_inputs if self.encoder_video_source == 'low'
+                              else high_dim_inputs)
+
+        # ---- Modality selection
+        if self.no_selector:
+            batch_size = next(iter(high_dim_inputs.values())).shape[0]
+            device = next(iter(high_dim_inputs.values())).device
+            modality_weights = torch.full(
+                (batch_size, self.num_modalities), 1.0 / self.num_modalities, device=device
+            )
+            primary_idx = torch.zeros(batch_size, dtype=torch.long, device=device)
+            selected_modalities = None
+        else:
+            selector_inputs = {}
+            for modality in self.modalities:
+                if modality == 'video':
+                    if 'video' in selector_video_dict:
+                        selector_inputs['video'] = selector_video_dict['video']
+                else:
+                    if modality in low_dim_inputs:
+                        selector_inputs[modality] = low_dim_inputs[modality]
+                    elif modality in high_dim_inputs:
+                        selector_inputs[modality] = high_dim_inputs[modality]
+
+            primary_idx, modality_weights, selected_modalities = self.modality_selector(
+                selector_inputs,
+                top_k=self.top_k,
+                training=training,
+            )
+
+        # GRPO group-member override: outer wrapper passes an externally
+        # sampled K-subset (e.g. Gumbel-top-K of a different action sample).
+        # Honor it so the rest of the forward operates on those K modalities;
+        # modality_weights is left untouched so log_prob_action stays valid.
+        if override_selected_modalities is not None:
+            selected_modalities = override_selected_modalities
+
+        # ---- Per-modality input projection
+        projected_features = {}
+        for modality in self.modalities:
+            if modality == 'video':
+                if 'video' in encoder_video_dict:
+                    projected_features['video'] = self.input_projectors['video'](
+                        encoder_video_dict['video']
+                    )
+            else:
+                if modality in high_dim_inputs:
+                    projected_features[modality] = self.input_projectors[modality](
+                        high_dim_inputs[modality]
+                    )
+
+        # ---- Per-modality encoder (batched)
+        base_factor = factor if factor is not None else self.factor
+        processed_modalities = self._encode_modalities(
+            projected_features, selected_modalities, base_factor)
+
+        # ---- Fusion factor (optional per-modality weighting)
+        if self.use_weighted_factor and not self.no_selector:
+            fusion_factor = {
+                m: modality_weights[:, i].mean().item() * base_factor * self.num_modalities
+                for i, m in enumerate(self.modalities)
+                if m in processed_modalities
+            }
+        else:
+            fusion_factor = base_factor
+
+        # ---- Bottleneck fusion + classifier
+        fused = self.bottleneck_fusion(
+            processed_modalities, return_tokens=False, factor=fusion_factor
+        )
+        output = self.regressor(fused)
+
+        if return_selection_info:
+            if labels is not None and training and not self.no_selector:
+                aux_losses = self._compute_all_aux_losses(
+                    labels, modality_weights, selected_modalities, output
+                )
+                return output, primary_idx, modality_weights, selected_modalities, aux_losses
+            return output, primary_idx, modality_weights, selected_modalities
+
+        return output
+
+    # ------------------------------------------------------------------
+    # Auxiliary losses (probe / sparsity / reinforce)
+    # ------------------------------------------------------------------
+    def _compute_all_aux_losses(self, labels, modality_weights, selected_modalities, output):
+        aux_losses = {}
+
+        is_classification = labels.dtype in (torch.long, torch.int)
+        if is_classification:
+            raw_aux = self.modality_selector.compute_auxiliary_losses(labels=labels)
+            if 'probe_loss' in raw_aux and self.lambda_probe > 0:
+                aux_losses['probe_loss'] = self.lambda_probe * raw_aux['probe_loss']
+
+        if self.lambda_sparsity > 0 and selected_modalities is not None:
+            selected_indices = set(self.modalities.index(m) for m in selected_modalities
+                                   if m in self.modalities)
+            non_selected_weights = []
+            for i in range(self.num_modalities):
+                if i not in selected_indices:
+                    non_selected_weights.append(modality_weights[:, i])
+            if non_selected_weights:
+                sparsity_loss = torch.stack(non_selected_weights, dim=0).mean()
+                aux_losses['sparsity_loss'] = self.lambda_sparsity * sparsity_loss
+
+        if selected_modalities is not None and self.top_k is not None:
+            with torch.no_grad():
+                if output.shape[-1] > 1 and labels.dtype in (torch.long, torch.int):
+                    task_loss = F.cross_entropy(output.detach(), labels, reduction='none')
+                else:
+                    task_loss = F.mse_loss(output.detach().squeeze(-1), labels.float(), reduction='none')
+
+                if not hasattr(self, '_reward_baseline'):
+                    self._reward_baseline = task_loss.mean().item()
+                else:
+                    self._reward_baseline = (0.9 * self._reward_baseline
+                                             + 0.1 * task_loss.mean().item())
+                advantage = -(task_loss - self._reward_baseline)
+
+            selected_indices = [self.modalities.index(m) for m in selected_modalities
+                                 if m in self.modalities]
+            if selected_indices:
+                log_probs = torch.log(modality_weights[:, selected_indices] + 1e-8)
+                log_prob_action = log_probs.sum(dim=1)
+                reinforce_loss = -(advantage * log_prob_action).mean()
+                aux_losses['reinforce_loss'] = self.lambda_reinforce * reinforce_loss
+
+        return aux_losses

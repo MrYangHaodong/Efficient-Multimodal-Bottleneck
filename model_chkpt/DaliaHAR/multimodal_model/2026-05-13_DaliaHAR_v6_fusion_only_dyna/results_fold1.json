@@ -1,0 +1,582 @@
+{
+    "experiment_name": "2026-05-13_DaliaHAR_v6_fusion_only_dyna",
+    "fold": 1,
+    "best_val_acc": 0.8276098901098901,
+    "best_val_f1": 0.8569678101932923,
+    "best_epoch_val": 116,
+    "selected_source": "warm",
+    "cold_best": {
+        "val_acc": 0.8276098901098901,
+        "val_f1": 0.8569678101932923,
+        "epoch": 116
+    },
+    "best_test_acc": 0.7399129746835443,
+    "best_test_f1": 0.7583222947117967,
+    "final_grad_norms": {
+        "wrist_ACC": 0.5190656842337922,
+        "wrist_BVP": 0.555286198509857,
+        "wrist_EDA": 0.1720343062374741,
+        "wrist_TEMP": 0.10566217258106918,
+        "chest_ACC": 0.9547304107993841
+    },
+    "profile_log": [
+        {
+            "epoch": 45,
+            "mod_base": 0.03333333333333333,
+            "grad_norms": {
+                "wrist_ACC": 0.5565135991573333,
+                "wrist_BVP": 0.09566936018411071,
+                "wrist_EDA": 0.03619042299222201,
+                "wrist_TEMP": 0.053402545000426474,
+                "chest_ACC": 0.7983143357932567
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.0602,
+                "wrist_BVP": 0.0104,
+                "wrist_EDA": 0.0039,
+                "wrist_TEMP": 0.0058,
+                "chest_ACC": 0.0864
+            }
+        },
+        {
+            "epoch": 50,
+            "mod_base": 0.06666666666666667,
+            "grad_norms": {
+                "wrist_ACC": 0.5846027252078057,
+                "wrist_BVP": 0.09671976491808891,
+                "wrist_EDA": 0.04813895014114678,
+                "wrist_TEMP": 0.05311238872585818,
+                "chest_ACC": 0.6777128821238876
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.1334,
+                "wrist_BVP": 0.0221,
+                "wrist_EDA": 0.011,
+                "wrist_TEMP": 0.0121,
+                "chest_ACC": 0.1547
+            }
+        },
+        {
+            "epoch": 55,
+            "mod_base": 0.1,
+            "grad_norms": {
+                "wrist_ACC": 0.5891014987975359,
+                "wrist_BVP": 0.14370867853518576,
+                "wrist_EDA": 0.06221119673922658,
+                "wrist_TEMP": 0.06839402911718935,
+                "chest_ACC": 0.9334630401432514
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.1639,
+                "wrist_BVP": 0.04,
+                "wrist_EDA": 0.0173,
+                "wrist_TEMP": 0.019,
+                "chest_ACC": 0.2597
+            }
+        },
+        {
+            "epoch": 60,
+            "mod_base": 0.13333333333333333,
+            "grad_norms": {
+                "wrist_ACC": 0.5483967849984765,
+                "wrist_BVP": 0.1402499052742496,
+                "wrist_EDA": 0.06023684661602601,
+                "wrist_TEMP": 0.05817900533322245,
+                "chest_ACC": 0.720154316239059
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.2394,
+                "wrist_BVP": 0.0612,
+                "wrist_EDA": 0.0263,
+                "wrist_TEMP": 0.0254,
+                "chest_ACC": 0.3144
+            }
+        },
+        {
+            "epoch": 65,
+            "mod_base": 0.16666666666666666,
+            "grad_norms": {
+                "wrist_ACC": 0.5844412649609149,
+                "wrist_BVP": 0.15861290116328747,
+                "wrist_EDA": 0.06404275738750584,
+                "wrist_TEMP": 0.05744885415071622,
+                "chest_ACC": 0.730068864300847
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.3054,
+                "wrist_BVP": 0.0829,
+                "wrist_EDA": 0.0335,
+                "wrist_TEMP": 0.03,
+                "chest_ACC": 0.3815
+            }
+        },
+        {
+            "epoch": 70,
+            "mod_base": 0.2,
+            "grad_norms": {
+                "wrist_ACC": 0.6746604324877262,
+                "wrist_BVP": 0.2011281219869852,
+                "wrist_EDA": 0.08457099799998105,
+                "wrist_TEMP": 0.0721279358305037,
+                "chest_ACC": 0.7583584087248891
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.3767,
+                "wrist_BVP": 0.1123,
+                "wrist_EDA": 0.0472,
+                "wrist_TEMP": 0.0403,
+                "chest_ACC": 0.4235
+            }
+        },
+        {
+            "epoch": 75,
+            "mod_base": 0.23333333333333334,
+            "grad_norms": {
+                "wrist_ACC": 0.6551508085988462,
+                "wrist_BVP": 0.21847090725786983,
+                "wrist_EDA": 0.08144054220756516,
+                "wrist_TEMP": 0.0629565401445143,
+                "chest_ACC": 0.6802307038754225
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.4501,
+                "wrist_BVP": 0.1501,
+                "wrist_EDA": 0.0559,
+                "wrist_TEMP": 0.0433,
+                "chest_ACC": 0.4673
+            }
+        },
+        {
+            "epoch": 80,
+            "mod_base": 0.26666666666666666,
+            "grad_norms": {
+                "wrist_ACC": 0.6711242417059838,
+                "wrist_BVP": 0.22317665374372153,
+                "wrist_EDA": 0.0898218449181877,
+                "wrist_TEMP": 0.07240913561079651,
+                "chest_ACC": 0.8957848688773811
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.4583,
+                "wrist_BVP": 0.1524,
+                "wrist_EDA": 0.0613,
+                "wrist_TEMP": 0.0495,
+                "chest_ACC": 0.6118
+            }
+        },
+        {
+            "epoch": 85,
+            "mod_base": 0.3,
+            "grad_norms": {
+                "wrist_ACC": 0.8464886841922998,
+                "wrist_BVP": 0.2901418625190854,
+                "wrist_EDA": 0.1099887661356479,
+                "wrist_TEMP": 0.08097969284281134,
+                "chest_ACC": 0.970195262953639
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.5526,
+                "wrist_BVP": 0.1894,
+                "wrist_EDA": 0.0718,
+                "wrist_TEMP": 0.0529,
+                "chest_ACC": 0.6333
+            }
+        },
+        {
+            "epoch": 90,
+            "mod_base": 0.3333333333333333,
+            "grad_norms": {
+                "wrist_ACC": 0.7088779148459434,
+                "wrist_BVP": 0.39173772199079393,
+                "wrist_EDA": 0.11299929848173633,
+                "wrist_TEMP": 0.0760662849410437,
+                "chest_ACC": 0.9596036374010146
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.5253,
+                "wrist_BVP": 0.2903,
+                "wrist_EDA": 0.0837,
+                "wrist_TEMP": 0.0564,
+                "chest_ACC": 0.711
+            }
+        },
+        {
+            "epoch": 95,
+            "mod_base": 0.36666666666666664,
+            "grad_norms": {
+                "wrist_ACC": 0.8153205721825362,
+                "wrist_BVP": 0.3540807985700667,
+                "wrist_EDA": 0.11461440988816321,
+                "wrist_TEMP": 0.08074776731664315,
+                "chest_ACC": 0.8965910162962973
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.661,
+                "wrist_BVP": 0.2871,
+                "wrist_EDA": 0.0929,
+                "wrist_TEMP": 0.0655,
+                "chest_ACC": 0.7269
+            }
+        },
+        {
+            "epoch": 100,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.8940262803575024,
+                "wrist_BVP": 0.4684595435764641,
+                "wrist_EDA": 0.1457941435649991,
+                "wrist_TEMP": 0.09104890510905533,
+                "chest_ACC": 1.047072551320307
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6757,
+                "wrist_BVP": 0.354,
+                "wrist_EDA": 0.1102,
+                "wrist_TEMP": 0.0688,
+                "chest_ACC": 0.7913
+            }
+        },
+        {
+            "epoch": 105,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 1.029124442897737,
+                "wrist_BVP": 0.587121097985655,
+                "wrist_EDA": 0.17465920240618288,
+                "wrist_TEMP": 0.10202042635530234,
+                "chest_ACC": 1.1873210902139544
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6682,
+                "wrist_BVP": 0.3812,
+                "wrist_EDA": 0.1134,
+                "wrist_TEMP": 0.0662,
+                "chest_ACC": 0.7709
+            }
+        },
+        {
+            "epoch": 110,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.7776273110695183,
+                "wrist_BVP": 0.5004803657904268,
+                "wrist_EDA": 0.1670250794477761,
+                "wrist_TEMP": 0.09756935527548194,
+                "chest_ACC": 1.0185035049915314
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6072,
+                "wrist_BVP": 0.3908,
+                "wrist_EDA": 0.1304,
+                "wrist_TEMP": 0.0762,
+                "chest_ACC": 0.7953
+            }
+        },
+        {
+            "epoch": 115,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.9059271473810077,
+                "wrist_BVP": 0.6075936375372112,
+                "wrist_EDA": 0.19627278742846102,
+                "wrist_TEMP": 0.10596832097973674,
+                "chest_ACC": 1.1506635255366564
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6108,
+                "wrist_BVP": 0.4096,
+                "wrist_EDA": 0.1323,
+                "wrist_TEMP": 0.0714,
+                "chest_ACC": 0.7758
+            }
+        },
+        {
+            "epoch": 120,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.880574119775556,
+                "wrist_BVP": 0.46663563408888875,
+                "wrist_EDA": 0.16821045542368665,
+                "wrist_TEMP": 0.09964368029497564,
+                "chest_ACC": 0.8947006684821099
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.7017,
+                "wrist_BVP": 0.3719,
+                "wrist_EDA": 0.134,
+                "wrist_TEMP": 0.0794,
+                "chest_ACC": 0.713
+            }
+        },
+        {
+            "epoch": 125,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.8658171169366687,
+                "wrist_BVP": 0.4881484981067479,
+                "wrist_EDA": 0.17208360956050456,
+                "wrist_TEMP": 0.11451869405107573,
+                "chest_ACC": 1.0231708040926606
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6501,
+                "wrist_BVP": 0.3665,
+                "wrist_EDA": 0.1292,
+                "wrist_TEMP": 0.086,
+                "chest_ACC": 0.7682
+            }
+        },
+        {
+            "epoch": 130,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.9143825258407742,
+                "wrist_BVP": 0.6156281412392854,
+                "wrist_EDA": 0.1818956744368188,
+                "wrist_TEMP": 0.10397342169890181,
+                "chest_ACC": 0.8821246567880735
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6778,
+                "wrist_BVP": 0.4564,
+                "wrist_EDA": 0.1348,
+                "wrist_TEMP": 0.0771,
+                "chest_ACC": 0.6539
+            }
+        },
+        {
+            "epoch": 135,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.8989885333739221,
+                "wrist_BVP": 0.4427690542954952,
+                "wrist_EDA": 0.1611988346790895,
+                "wrist_TEMP": 0.09559174447786063,
+                "chest_ACC": 1.1337861349619924
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.658,
+                "wrist_BVP": 0.3241,
+                "wrist_EDA": 0.118,
+                "wrist_TEMP": 0.07,
+                "chest_ACC": 0.8
+            }
+        },
+        {
+            "epoch": 140,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.8208484427258372,
+                "wrist_BVP": 0.5236977314017713,
+                "wrist_EDA": 0.17356793532148004,
+                "wrist_TEMP": 0.0977698563458398,
+                "chest_ACC": 1.014836698928848
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.624,
+                "wrist_BVP": 0.3981,
+                "wrist_EDA": 0.132,
+                "wrist_TEMP": 0.0743,
+                "chest_ACC": 0.7715
+            }
+        },
+        {
+            "epoch": 145,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.9444736019521952,
+                "wrist_BVP": 0.6223229698417708,
+                "wrist_EDA": 0.18209711265284567,
+                "wrist_TEMP": 0.11534409042447806,
+                "chest_ACC": 0.9926222971267998
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6612,
+                "wrist_BVP": 0.4357,
+                "wrist_EDA": 0.1275,
+                "wrist_TEMP": 0.0807,
+                "chest_ACC": 0.6949
+            }
+        },
+        {
+            "epoch": 150,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 1.0160704886913299,
+                "wrist_BVP": 0.5623559669265523,
+                "wrist_EDA": 0.16981226981151848,
+                "wrist_TEMP": 0.12060775449033827,
+                "chest_ACC": 0.9551453271973878
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.7196,
+                "wrist_BVP": 0.3983,
+                "wrist_EDA": 0.1203,
+                "wrist_TEMP": 0.0854,
+                "chest_ACC": 0.6765
+            }
+        },
+        {
+            "epoch": 155,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.7419744372088463,
+                "wrist_BVP": 0.5279578164312988,
+                "wrist_EDA": 0.1614607697771862,
+                "wrist_TEMP": 0.09508674261393026,
+                "chest_ACC": 0.9103951558936387
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.609,
+                "wrist_BVP": 0.4333,
+                "wrist_EDA": 0.1325,
+                "wrist_TEMP": 0.078,
+                "chest_ACC": 0.7472
+            }
+        },
+        {
+            "epoch": 160,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.9333436516299843,
+                "wrist_BVP": 0.6149829554324969,
+                "wrist_EDA": 0.1907065038685687,
+                "wrist_TEMP": 0.11073717839084565,
+                "chest_ACC": 0.7301992045063526
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.7235,
+                "wrist_BVP": 0.4767,
+                "wrist_EDA": 0.1478,
+                "wrist_TEMP": 0.0858,
+                "chest_ACC": 0.5661
+            }
+        },
+        {
+            "epoch": 165,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.8139901949977503,
+                "wrist_BVP": 0.7163651981018484,
+                "wrist_EDA": 0.1946992744412273,
+                "wrist_TEMP": 0.11924405977362768,
+                "chest_ACC": 1.0179744595568627
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.5688,
+                "wrist_BVP": 0.5006,
+                "wrist_EDA": 0.136,
+                "wrist_TEMP": 0.0833,
+                "chest_ACC": 0.7113
+            }
+        },
+        {
+            "epoch": 170,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.8204507864173501,
+                "wrist_BVP": 0.5716864026663825,
+                "wrist_EDA": 0.1574174948921427,
+                "wrist_TEMP": 0.09808762572472915,
+                "chest_ACC": 0.8338972444925458
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6612,
+                "wrist_BVP": 0.4608,
+                "wrist_EDA": 0.1269,
+                "wrist_TEMP": 0.0791,
+                "chest_ACC": 0.6721
+            }
+        },
+        {
+            "epoch": 175,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.7803514431603253,
+                "wrist_BVP": 0.47933096249587837,
+                "wrist_EDA": 0.1931832859525457,
+                "wrist_TEMP": 0.10655204352224246,
+                "chest_ACC": 0.737995313089341
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.6793,
+                "wrist_BVP": 0.4173,
+                "wrist_EDA": 0.1682,
+                "wrist_TEMP": 0.0928,
+                "chest_ACC": 0.6425
+            }
+        },
+        {
+            "epoch": 180,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.6938188793789596,
+                "wrist_BVP": 0.6318919365247712,
+                "wrist_EDA": 0.1809499733732082,
+                "wrist_TEMP": 0.11066013732692227,
+                "chest_ACC": 0.9096718951314687
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.5491,
+                "wrist_BVP": 0.5001,
+                "wrist_EDA": 0.1432,
+                "wrist_TEMP": 0.0876,
+                "chest_ACC": 0.72
+            }
+        },
+        {
+            "epoch": 185,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.917914519503247,
+                "wrist_BVP": 0.56528685141413,
+                "wrist_EDA": 0.17776140844944166,
+                "wrist_TEMP": 0.11366582851303975,
+                "chest_ACC": 0.9370743924751878
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.677,
+                "wrist_BVP": 0.4169,
+                "wrist_EDA": 0.1311,
+                "wrist_TEMP": 0.0838,
+                "chest_ACC": 0.6911
+            }
+        },
+        {
+            "epoch": 190,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.6534323386754841,
+                "wrist_BVP": 0.4476344708679244,
+                "wrist_EDA": 0.1733882641675882,
+                "wrist_TEMP": 0.10432319008279592,
+                "chest_ACC": 0.9214701852761209
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.5681,
+                "wrist_BVP": 0.3892,
+                "wrist_EDA": 0.1508,
+                "wrist_TEMP": 0.0907,
+                "chest_ACC": 0.8
+            }
+        },
+        {
+            "epoch": 195,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "wrist_ACC": 0.9703670457284898,
+                "wrist_BVP": 0.5303726313589141,
+                "wrist_EDA": 0.17499711061595008,
+                "wrist_TEMP": 0.10881177337374538,
+                "chest_ACC": 0.6807844238355756
+            },
+            "mod_dropout_probs": {
+                "wrist_ACC": 0.7872,
+                "wrist_BVP": 0.4303,
+                "wrist_EDA": 0.142,
+                "wrist_TEMP": 0.0883,
+                "chest_ACC": 0.5523
+            }
+        }
+    ]
+}

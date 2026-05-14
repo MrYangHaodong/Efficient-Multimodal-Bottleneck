@@ -1,0 +1,15 @@
+{
+    "experiment_name": "2026-05-13_DaliaHAR_v6_fusion_only",
+    "fold": 2,
+    "best_val_acc": 0.8076923076923077,
+    "best_val_f1": 0.8235553334781845,
+    "best_epoch_val": 162,
+    "selected_source": "warm",
+    "cold_best": {
+        "val_acc": 0.8125,
+        "val_f1": 0.8295537099576592,
+        "epoch": 134
+    },
+    "best_test_acc": 0.7882982336956522,
+    "best_test_f1": 0.7892077253105504
+}
