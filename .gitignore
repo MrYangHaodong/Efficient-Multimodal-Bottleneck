@@ -14,11 +14,6 @@ build/
 .venv
 env/
 
-# Model checkpoints (binary weights)
-model_chkpt/**/*.pth
-model_chkpt/**/*.pt
-model_chkpt/**/*.ckpt
-
 # TensorBoard event files
 script/runs/
 
