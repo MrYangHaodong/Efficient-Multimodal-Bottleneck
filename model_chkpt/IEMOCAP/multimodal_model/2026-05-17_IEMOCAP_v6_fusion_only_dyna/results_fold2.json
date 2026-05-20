@@ -1,0 +1,325 @@
+{
+    "experiment_name": "2026-05-17_IEMOCAP_v6_fusion_only_dyna",
+    "fold": 2,
+    "best_val_acc": 0.7867867867867868,
+    "best_val_f1": 0.7704883852262794,
+    "best_epoch_val": 19,
+    "selected_source": "cold (cold 0.7868 > warm by >2%)",
+    "cold_best": {
+        "val_acc": 0.7867867867867868,
+        "val_f1": 0.7704883852262794,
+        "epoch": 19
+    },
+    "best_test_acc": 0.7756315007429421,
+    "best_test_f1": 0.7652908259296862,
+    "final_grad_norms": {
+        "video": 4.334606488315622,
+        "audio": 2.645415418668417,
+        "text": 1.2034891930501908,
+        "mocap_hand": 0.3611691085044731,
+        "mocap_head": 0.09252263291022246,
+        "mocap_rotated": 2.3686365530907643
+    },
+    "profile_log": [
+        {
+            "epoch": 25,
+            "mod_base": 0.06666666666666667,
+            "grad_norms": {
+                "video": 3.049140623677522,
+                "audio": 2.7146159146539866,
+                "text": 3.7730024839006364,
+                "mocap_hand": 0.14358757188369053,
+                "mocap_head": 0.029287472818105016,
+                "mocap_rotated": 0.38972925872774794
+            },
+            "mod_dropout_probs": {
+                "video": 0.1208,
+                "audio": 0.1075,
+                "text": 0.1494,
+                "mocap_hand": 0.0057,
+                "mocap_head": 0.0012,
+                "mocap_rotated": 0.0154
+            }
+        },
+        {
+            "epoch": 30,
+            "mod_base": 0.13333333333333333,
+            "grad_norms": {
+                "video": 4.122055310569704,
+                "audio": 4.128365963073447,
+                "text": 3.2135098089277743,
+                "mocap_hand": 0.2970926848310046,
+                "mocap_head": 0.04836954378537484,
+                "mocap_rotated": 1.3134951971052216
+            },
+            "mod_dropout_probs": {
+                "video": 0.2513,
+                "audio": 0.2517,
+                "text": 0.1959,
+                "mocap_hand": 0.0181,
+                "mocap_head": 0.0029,
+                "mocap_rotated": 0.0801
+            }
+        },
+        {
+            "epoch": 35,
+            "mod_base": 0.2,
+            "grad_norms": {
+                "video": 4.4330906492192295,
+                "audio": 3.289826768580824,
+                "text": 4.427873064409941,
+                "mocap_hand": 0.25293193569901634,
+                "mocap_head": 0.0514187299713376,
+                "mocap_rotated": 1.6837453096819808
+            },
+            "mod_dropout_probs": {
+                "video": 0.3762,
+                "audio": 0.2792,
+                "text": 0.3758,
+                "mocap_hand": 0.0215,
+                "mocap_head": 0.0044,
+                "mocap_rotated": 0.1429
+            }
+        },
+        {
+            "epoch": 40,
+            "mod_base": 0.26666666666666666,
+            "grad_norms": {
+                "video": 5.703760719001293,
+                "audio": 4.587921377662569,
+                "text": 3.7166955254599454,
+                "mocap_hand": 0.27904918847198135,
+                "mocap_head": 0.05913135077222251,
+                "mocap_rotated": 2.5195176748093218
+            },
+            "mod_dropout_probs": {
+                "video": 0.5411,
+                "audio": 0.4352,
+                "text": 0.3526,
+                "mocap_hand": 0.0265,
+                "mocap_head": 0.0056,
+                "mocap_rotated": 0.239
+            }
+        },
+        {
+            "epoch": 45,
+            "mod_base": 0.3333333333333333,
+            "grad_norms": {
+                "video": 3.420314645394683,
+                "audio": 3.357335944278166,
+                "text": 3.9512411714717746,
+                "mocap_hand": 0.29687454870319924,
+                "mocap_head": 0.061161455947876676,
+                "mocap_rotated": 1.8410071348771453
+            },
+            "mod_dropout_probs": {
+                "video": 0.5291,
+                "audio": 0.5194,
+                "text": 0.6113,
+                "mocap_hand": 0.0459,
+                "mocap_head": 0.0095,
+                "mocap_rotated": 0.2848
+            }
+        },
+        {
+            "epoch": 50,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 7.041465063914656,
+                "audio": 5.30022412810009,
+                "text": 3.880714429523796,
+                "mocap_hand": 0.49091402905352877,
+                "mocap_head": 0.08661801944457694,
+                "mocap_rotated": 3.8160367012023926
+            },
+            "mod_dropout_probs": {
+                "video": 0.8,
+                "audio": 0.617,
+                "text": 0.4518,
+                "mocap_hand": 0.0571,
+                "mocap_head": 0.0101,
+                "mocap_rotated": 0.4442
+            }
+        },
+        {
+            "epoch": 55,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 5.287145379032008,
+                "audio": 4.843423960492946,
+                "text": 3.6660625066608192,
+                "mocap_hand": 0.3420405954227317,
+                "mocap_head": 0.0883840510158916,
+                "mocap_rotated": 3.222803529642988
+            },
+            "mod_dropout_probs": {
+                "video": 0.7272,
+                "audio": 0.6661,
+                "text": 0.5042,
+                "mocap_hand": 0.047,
+                "mocap_head": 0.0122,
+                "mocap_rotated": 0.4433
+            }
+        },
+        {
+            "epoch": 60,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 6.002677696608007,
+                "audio": 5.15054489815142,
+                "text": 3.686604009633884,
+                "mocap_hand": 0.4080044661159627,
+                "mocap_head": 0.09501641343187657,
+                "mocap_rotated": 3.1981935164891184
+            },
+            "mod_dropout_probs": {
+                "video": 0.777,
+                "audio": 0.6667,
+                "text": 0.4772,
+                "mocap_hand": 0.0528,
+                "mocap_head": 0.0123,
+                "mocap_rotated": 0.414
+            }
+        },
+        {
+            "epoch": 65,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 5.707867885818705,
+                "audio": 5.805032758291345,
+                "text": 2.643287551268004,
+                "mocap_hand": 0.4239813887400669,
+                "mocap_head": 0.10504376957338536,
+                "mocap_rotated": 3.5524529067613186
+            },
+            "mod_dropout_probs": {
+                "video": 0.7511,
+                "audio": 0.7639,
+                "text": 0.3478,
+                "mocap_hand": 0.0558,
+                "mocap_head": 0.0138,
+                "mocap_rotated": 0.4675
+            }
+        },
+        {
+            "epoch": 70,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 3.7229016634682193,
+                "audio": 3.4294975092308597,
+                "text": 2.0847230379329993,
+                "mocap_hand": 0.37651735456049207,
+                "mocap_head": 0.09750407574247219,
+                "mocap_rotated": 2.015601089829579
+            },
+            "mod_dropout_probs": {
+                "video": 0.7619,
+                "audio": 0.7019,
+                "text": 0.4267,
+                "mocap_hand": 0.0771,
+                "mocap_head": 0.02,
+                "mocap_rotated": 0.4125
+            }
+        },
+        {
+            "epoch": 75,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 4.8002363758184945,
+                "audio": 3.6658206857112234,
+                "text": 1.7414091276028194,
+                "mocap_hand": 0.5571049188642064,
+                "mocap_head": 0.12589855345504475,
+                "mocap_rotated": 3.575792076042853
+            },
+            "mod_dropout_probs": {
+                "video": 0.7964,
+                "audio": 0.6082,
+                "text": 0.2889,
+                "mocap_hand": 0.0924,
+                "mocap_head": 0.0209,
+                "mocap_rotated": 0.5932
+            }
+        },
+        {
+            "epoch": 80,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 4.6944087444106115,
+                "audio": 3.702655177132692,
+                "text": 1.5951015791902319,
+                "mocap_hand": 0.3992878226886387,
+                "mocap_head": 0.08746916850090201,
+                "mocap_rotated": 2.2814705506950848
+            },
+            "mod_dropout_probs": {
+                "video": 0.8,
+                "audio": 0.6964,
+                "text": 0.3,
+                "mocap_hand": 0.0751,
+                "mocap_head": 0.0165,
+                "mocap_rotated": 0.4291
+            }
+        },
+        {
+            "epoch": 85,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 3.257382735952269,
+                "audio": 2.8422932587657126,
+                "text": 1.4600277168513276,
+                "mocap_hand": 0.3882409984376136,
+                "mocap_head": 0.09138617576369143,
+                "mocap_rotated": 2.1326805544440868
+            },
+            "mod_dropout_probs": {
+                "video": 0.7686,
+                "audio": 0.6706,
+                "text": 0.3445,
+                "mocap_hand": 0.0916,
+                "mocap_head": 0.0216,
+                "mocap_rotated": 0.5032
+            }
+        },
+        {
+            "epoch": 90,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 4.557723631078843,
+                "audio": 3.039116964280838,
+                "text": 1.0294982632494065,
+                "mocap_hand": 0.4124499310339161,
+                "mocap_head": 0.08854579007842403,
+                "mocap_rotated": 1.9944730464083842
+            },
+            "mod_dropout_probs": {
+                "video": 0.8,
+                "audio": 0.6558,
+                "text": 0.2222,
+                "mocap_hand": 0.089,
+                "mocap_head": 0.0191,
+                "mocap_rotated": 0.4304
+            }
+        },
+        {
+            "epoch": 95,
+            "mod_base": 0.4,
+            "grad_norms": {
+                "video": 4.237277180465171,
+                "audio": 2.2070458313281414,
+                "text": 1.2361607865651605,
+                "mocap_hand": 0.35110503027841333,
+                "mocap_head": 0.08476274373777415,
+                "mocap_rotated": 1.599207485730294
+            },
+            "mod_dropout_probs": {
+                "video": 0.8,
+                "audio": 0.5452,
+                "text": 0.3054,
+                "mocap_hand": 0.0867,
+                "mocap_head": 0.0209,
+                "mocap_rotated": 0.395
+            }
+        }
+    ]
+}
