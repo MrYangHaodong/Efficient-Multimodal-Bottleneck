@@ -31,6 +31,46 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class _ResBlock(nn.Module):
+    """Pre-LN residual block with Swish/SiLU activation, as used in the
+    1000-Layer Self-Supervised RL paper (Wang et al., NeurIPS 2025 best
+    paper) — the combination they identify as the minimal stable recipe
+    for scaling depth: LayerNorm → Linear → SiLU → Linear → residual."""
+
+    def __init__(self, h: int):
+        super().__init__()
+        self.ln = nn.LayerNorm(h)
+        self.fc1 = nn.Linear(h, h)
+        self.fc2 = nn.Linear(h, h)
+
+    def forward(self, x):
+        return x + self.fc2(F.silu(self.fc1(self.ln(x))))
+
+
+class _DeepSelectorMLP(nn.Module):
+    """Replacement for the default 3-layer selector MLP.  Uses ``depth``
+    residual blocks (pre-LN + SiLU).  Scaling tip from the NeurIPS 2025
+    best paper: depth > width — same accuracy at ~50× fewer params via
+    depth on contrastive RL.  Default hidden size matches the legacy
+    selector_mlp so existing checkpoints stay roughly comparable.
+    """
+
+    def __init__(self, in_dim: int, out_dim: int, hidden_dim: int = 128,
+                 depth: int = 16):
+        super().__init__()
+        self.proj_in = nn.Linear(in_dim, hidden_dim)
+        self.blocks = nn.ModuleList([_ResBlock(hidden_dim) for _ in range(depth)])
+        self.norm_out = nn.LayerNorm(hidden_dim)
+        self.proj_out = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, x):
+        x = self.proj_in(x)
+        for b in self.blocks:
+            x = b(x)
+        x = self.norm_out(x)
+        return self.proj_out(x)
+
+
 __all__ = [
     'ImprovedModalitySelector',
     'CurriculumScheduler',
@@ -88,6 +128,15 @@ class ImprovedModalitySelector(nn.Module):
         use_holo_bias: bool = False,
         holo_scale: float = 1.0,
         holo_eps: float = 1e-3,
+        selector_depth: int = 0,
+        use_multi_pool: bool = False,
+        use_tx_summarizer: bool = False,
+        tx_d_model: int = 64,
+        tx_nhead: int = 4,
+        tx_layers: int = 1,
+        tx_dim_ff: int = 128,
+        tx_dropout: float = 0.1,
+        tx_max_seq_len: int = 512,
     ):
         super().__init__()
         self.modalities = modalities
@@ -105,16 +154,63 @@ class ImprovedModalitySelector(nn.Module):
         self.use_holo_bias = use_holo_bias
         self.holo_scale = float(holo_scale)
         self.holo_eps = float(holo_eps)
+        # Multi-pool aggregation: concat [attn_pool, mean_pool, max_pool]
+        # along the channel dim before per-modality projector. Triples
+        # projector input width but keeps projector output at uniform_dim
+        # so selector_mlp sees the same input shape. Helps when the
+        # learned-attention pool alone misses local burst / peak signals
+        # that drive per-sample Shapley heterogeneity.
+        self.use_multi_pool = bool(use_multi_pool)
+        # Transformer summarizer: per-modality embed → 1-layer (or N) self-
+        # attention TransformerEncoder over tokens → then pool. Attacks the
+        # 'input compression' bottleneck — lets tokens see each other before
+        # we squash to a single per-modality vector. Independent of
+        # ``use_multi_pool``; combined is the most expressive setup.
+        self.use_tx_summarizer = bool(use_tx_summarizer)
+        self.tx_d_model = int(tx_d_model)
+        self.tx_max_seq_len = int(tx_max_seq_len)
 
-        self.attention_vectors = nn.ParameterDict({
-            m: nn.Parameter(torch.randn(low_dim_dict.get(m, 256)) * 0.02)
-            for m in modalities
-        })
-
-        self.projectors = nn.ModuleDict({
-            m: nn.Linear(low_dim_dict.get(m, 256), uniform_dim)
-            for m in modalities
-        })
+        if self.use_tx_summarizer:
+            # Per-modality embed V_m -> tx_d_model, position embed, and
+            # 1-layer TransformerEncoder. Then attention_vectors live at
+            # tx_d_model, projectors take tx_d_model input.
+            self.tx_embeds = nn.ModuleDict({
+                m: nn.Linear(low_dim_dict.get(m, 256), self.tx_d_model)
+                for m in modalities
+            })
+            self.tx_pos_embeds = nn.ParameterDict({
+                m: nn.Parameter(
+                    torch.randn(self.tx_max_seq_len, self.tx_d_model) * 0.02)
+                for m in modalities
+            })
+            self.tx_summarizers = nn.ModuleDict({
+                m: nn.TransformerEncoder(
+                    nn.TransformerEncoderLayer(
+                        d_model=self.tx_d_model, nhead=tx_nhead,
+                        dim_feedforward=tx_dim_ff, dropout=tx_dropout,
+                        batch_first=True, activation='gelu'),
+                    num_layers=tx_layers)
+                for m in modalities
+            })
+            self.attention_vectors = nn.ParameterDict({
+                m: nn.Parameter(torch.randn(self.tx_d_model) * 0.02)
+                for m in modalities
+            })
+            proj_in_mult = 3 if self.use_multi_pool else 1
+            self.projectors = nn.ModuleDict({
+                m: nn.Linear(proj_in_mult * self.tx_d_model, uniform_dim)
+                for m in modalities
+            })
+        else:
+            self.attention_vectors = nn.ParameterDict({
+                m: nn.Parameter(torch.randn(low_dim_dict.get(m, 256)) * 0.02)
+                for m in modalities
+            })
+            proj_in_mult = 3 if self.use_multi_pool else 1
+            self.projectors = nn.ModuleDict({
+                m: nn.Linear(proj_in_mult * low_dim_dict.get(m, 256), uniform_dim)
+                for m in modalities
+            })
 
         self.probe_heads = nn.ModuleDict({
             m: self._ProbeHead(uniform_dim, num_classes)
@@ -129,14 +225,28 @@ class ImprovedModalitySelector(nn.Module):
             + self.num_modalities
         )
 
-        self.selector_mlp = nn.Sequential(
-            nn.Linear(selector_input_dim, mlp_hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(mlp_hidden_dim, self.num_modalities),
-        )
+        # Selector MLP: legacy 3-layer ReLU vs deep residual (NeurIPS 2025
+        # best paper recipe — scaling depth with residual+LN+SiLU).  When
+        # ``selector_depth > 0`` we replace the legacy MLP with a stack of
+        # ``selector_depth`` residual blocks; the hidden width stays at
+        # ``mlp_hidden_dim`` so total params scale linearly with depth.
+        self.selector_depth = int(selector_depth)
+        if self.selector_depth > 0:
+            self.selector_mlp = _DeepSelectorMLP(
+                in_dim=selector_input_dim,
+                out_dim=self.num_modalities,
+                hidden_dim=mlp_hidden_dim,
+                depth=self.selector_depth,
+            )
+        else:
+            self.selector_mlp = nn.Sequential(
+                nn.Linear(selector_input_dim, mlp_hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(mlp_hidden_dim, self.num_modalities),
+            )
 
         self.interaction_matrix = nn.Parameter(
             torch.zeros(self.num_modalities, self.num_modalities)
@@ -151,6 +261,14 @@ class ImprovedModalitySelector(nn.Module):
         self.exploration_mode: str = 'none'   # 'none' | 'epsilon' | 'gumbel'
         self.exploration_eps: float = 0.0     # used when mode == 'epsilon'
         self.exploration_temp: float = 1.0    # used when mode == 'gumbel'
+
+        # When True, top-K is computed PER-SAMPLE: each batch sample selects
+        # its own K modalities via (weights * confs).topk(K, dim=1).  The
+        # forward returns selected_modalities=None and exposes a binary mask
+        # `self._selected_mask[B, M_total]` for downstream fusion masking.
+        # When False (default), the original batch-aggregated top-K runs.
+        self.per_sample_topk: bool = False
+        self._selected_mask: Optional[torch.Tensor] = None
 
         self._probe_logits: Dict[str, torch.Tensor] = {}
         self._batch_selection_entropy: Optional[torch.Tensor] = None
@@ -201,8 +319,28 @@ class ImprovedModalitySelector(nn.Module):
         aggregated = {}
         projected = {}
         for m in available_modalities:
-            aggregated[m] = self._aggregate(low_dim_features[m], self.attention_vectors[m])
-            projected[m] = self.projectors[m](aggregated[m])
+            H = low_dim_features[m]                        # [B, L, d_low]
+            if self.use_tx_summarizer:
+                # Embed V_m -> tx_d_model, add positional, run self-attn.
+                # Tokens interact before we collapse to per-modality vector.
+                H = self.tx_embeds[m](H)                    # [B, L, tx_d_model]
+                L = H.shape[1]
+                pe = self.tx_pos_embeds[m][:L].unsqueeze(0)  # [1, L, tx_d_model]
+                H = H + pe
+                H = self.tx_summarizers[m](H)               # [B, L, tx_d_model]
+            v_attn = self._aggregate(H, self.attention_vectors[m])   # [B, d_sum]
+            if self.use_multi_pool:
+                v_mean = H.mean(dim=1)
+                v_max  = H.max(dim=1).values
+                agg = torch.cat([v_attn, v_mean, v_max], dim=-1)
+            else:
+                agg = v_attn
+            aggregated[m] = agg
+            projected[m] = self.projectors[m](agg)
+        # Expose projected features so outer wrappers (e.g. the C3 conformal
+        # quantile head) can re-use them without duplicating the per-modality
+        # projector forward.
+        self._projected = projected
 
         confidences = {}
         self._probe_logits = {}
@@ -228,6 +366,14 @@ class ImprovedModalitySelector(nn.Module):
         selector_input = torch.cat([concat_features, concat_confidence], dim=1)   #FIXME agreement?
 
         logits = self.selector_mlp(selector_input)
+
+        # Test-time calibration hook: external code can set
+        # ``self._tt_logit_bias`` to a [B, M] tensor (or [M]) which gets
+        # added to selector logits before sigmoid + top-K. Unused if attr
+        # is missing or None.
+        tt_bias = getattr(self, '_tt_logit_bias', None)
+        if tt_bias is not None:
+            logits = logits + tt_bias.to(device=logits.device, dtype=logits.dtype)
 
         avail_mask = torch.zeros(batch_size, self.num_modalities, device=device)
         for m in available_modalities:
@@ -259,6 +405,12 @@ class ImprovedModalitySelector(nn.Module):
         unavail_mask = (avail_mask == 0)
         logits = logits.masked_fill(unavail_mask, float('-inf'))
 
+        # Expose raw selector logits for KL-style distillation losses that
+        # need pre-sigmoid logits (e.g., softmax KD vs ``softmax(phi/tau)``).
+        # Per-sample top-K mode in particular requires a normalised ranking
+        # signal — sigmoid alone can saturate all gates simultaneously.
+        self._raw_logits = logits
+
         weights = torch.sigmoid(logits)     # per-modality independent gating
         primary_idx = torch.argmax(weights, dim=1)
 
@@ -288,15 +440,36 @@ class ImprovedModalitySelector(nn.Module):
         ).sum()
 
         selected_modalities = None
+        self._selected_mask = None
         n_available = len(available_modalities)
 
         if top_k is not None and top_k < n_available:
             available_indices = [self.modalities.index(m) for m in available_modalities]
             available_weights = weights[:, available_indices]
             available_confs = concat_confidence[:, available_indices]
-
-            conf_weighted_scores = (available_weights * available_confs).mean(dim=0)
             k = max(1, min(top_k, n_available))
+
+            if self.per_sample_topk:
+                # ---- Per-sample top-K branch ----
+                # Each sample picks its own K modalities. Output a binary
+                # mask [B, M_total]; selected_modalities stays None so the
+                # outer V6 forward processes all M modalities and routes
+                # the mask into the fusion module.
+                per_sample_scores = available_weights * available_confs   # [B, n_avail]
+                topk_positions = per_sample_scores.topk(k, dim=1).indices  # [B, k]
+                selected_mask = torch.zeros(batch_size, self.num_modalities,
+                                             device=device, dtype=torch.bool)
+                avail_idx_tensor = torch.tensor(available_indices, device=device,
+                                                 dtype=torch.long)
+                canonical_topk = avail_idx_tensor[topk_positions]          # [B, k]
+                selected_mask.scatter_(1, canonical_topk, True)
+                self._selected_mask = selected_mask
+                # Return selected_modalities=None so V6 doesn't filter
+                # encoders by a batch-level subset; the mask drives fusion.
+                return primary_idx, weights, None
+
+            # ---- Original batch-aggregated top-K ----
+            conf_weighted_scores = (available_weights * available_confs).mean(dim=0)
 
             # Dispatch on exploration mode.  Only takes effect during
             # training; eval always uses the deterministic argmax-top-K so

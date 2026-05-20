@@ -167,6 +167,48 @@ class ModalityGradientProfiler:
         self._hooks = []
 
 
+class ModalityAccProfiler:
+    """Tracks per-modality auxiliary-classifier accuracy for CGGM-style
+    asymmetric dropout scheduling.
+
+    Drop-in replacement for ``ModalityGradientProfiler`` in CGGM training:
+    instead of using ``input_projector.grad.norm`` as the dominance signal,
+    we use the standalone-prediction accuracy from per-modality aux heads
+    (Guo et al., NeurIPS 2024 — accuracy is a more direct measure of
+    "which modality is leading the optimization").  Higher per-mod accuracy
+    -> higher dropout probability (suppress the dominant modality).
+    """
+
+    def __init__(self, modalities):
+        self.modalities = modalities
+        self.accs = {m: [] for m in modalities}
+
+    def update(self, per_mod_acc):
+        """``per_mod_acc``: dict {modality: float in [0,1]}."""
+        for m in self.modalities:
+            if m in per_mod_acc:
+                self.accs[m].append(float(per_mod_acc[m]))
+
+    def get_asymmetric_dropout_probs(self, base_prob, window=100):
+        mean_accs = {}
+        for m in self.modalities:
+            recent = self.accs[m][-window:] if self.accs[m] else [0.0]
+            mean_accs[m] = float(np.mean(recent))
+        total = sum(mean_accs.values())
+        if total == 0:
+            return {m: base_prob for m in self.modalities}
+        N = len(self.modalities)
+        ratios = {m: mean_accs[m] / total for m in self.modalities}
+        return {m: min(0.8, max(0.0, base_prob * N * ratios[m])) for m in self.modalities}
+
+    def get_acc_snapshot(self, window=100):
+        snap = {}
+        for m in self.modalities:
+            recent = self.accs[m][-window:] if self.accs[m] else [0.0]
+            snap[m] = float(np.mean(recent))
+        return snap
+
+
 # =============================================================================
 # Robust Training / Evaluation (for SentinelDropoutWrapper models)
 # =============================================================================

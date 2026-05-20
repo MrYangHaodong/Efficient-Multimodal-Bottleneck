@@ -1,35 +1,30 @@
-"""V6 fusion-only training on IEMOCAP with **uniform per-modality**
-Bernoulli modality-dropout curriculum (non-dyna baseline).
+"""V6 fusion-only training on IEMOCAP with **variable-length per-modality
+inputs** + **linear (uniform) modality dropout**.
 
-IEMOCAP counterpart to ``main_v6_daliahar_fusion_only.py`` and a
-non-asymmetric companion to ``main_v6_iemocap_fusion_only_dyna.py``.
+Pipeline differences vs ``main_v6_iemocap_fusion_only_dyna.py``:
 
-Staggered curriculum (identical schedule to dyna):
+  1. Backbone = orig V6 fusion (``v6_downsample_orig``) with
+     per-modality ``ModuleDict`` encoders.
+  2. ``IEMOCAPDataset(use_batched_fusion=False)`` — short modalities
+     keep their native T (no zero-pad to max_seq_len); only T>max_seq_len
+     gets interpolated down.  ``pad_sequence`` pads each modality to its
+     own batch-max T at collate time.
+  3. ``sparse_attn_variant='opt'`` (now dispatches to ``ProbSparseAttentionOpt``
+     even in orig, via the patch in v6_downsample_orig.py).
 
+This variant uses **uniform Bernoulli modality dropout**:
+``drop_prob[m] = mod_base`` for ALL modalities (no gradnorm-based
+asymmetry).  Schedule:
     epoch < 20% of num_epochs            -> drop_prob = 0   (clean)
     20% <= epoch < 50%                   -> linear 0 -> max_drop
     epoch >= 50%                         -> max_drop  (plateau)
 
-Difference vs dyna: ``current_mod_probs[m] = mod_base`` for ALL modalities
-(no gradnorm-based per-modality rescaling).  A ``ModalityGradientProfiler``
-hook is still attached so ``final_grad_norms`` is recorded in
-``results.json`` for downstream gradnorm-topK eval, but it does NOT
-influence dropout probabilities.
-
-Differences vs DSADS / DaliaHAR:
-  - **6 modalities** (video / audio / text / mocap_hand/head/rotated)
-    with heterogeneous feature dims (18..1280).
-  - ``IEMOCAPDataset`` returns a list of (high, low) tensor pairs +
-    label rather than a single concatenated ``(B, T, C)`` tensor.  The
-    wrapper unpacks it into V6's two dicts directly.
-  - Pre-extracted features (DINOv3 / WAV2VEC2 / BERT / MOCAP) — no SAX
-    token transform.
-  - 3 stratified 70/15/15 splits, ``--fold = 0/1/2``.
-  - 4-class emotion classification.
+ModalityGradientProfiler is still attached so ``final_grad_norms`` ends
+up in results.json (for downstream gradnorm-topK eval), but it never
+influences dropout probabilities.
 
 Run:
-    python main_v6_iemocap_fusion_only_dyna.py --fold=0 --cuda_pick=cuda:0
-    python main_v6_iemocap_fusion_only_dyna.py --aggregate
+    python main_v6_iemocap_fusion_only_varlen_linear.py --fold=0 --cuda_pick=cuda:0
 """
 from __future__ import annotations
 
@@ -64,7 +59,7 @@ from data.IEMOCAP.get_data import (
     get_dataloader as iemocap_get_dataloader,
     FEATURE_DIMS, NUM_CLASSES, IEMOCAPDataset,
 )
-from multimodal_model.v6_downsample_opt_batched import (
+from multimodal_model.v6_downsample_orig import (
     DualVideoBottleneckModelV6Downsample,
 )
 
@@ -229,7 +224,7 @@ parser = argparse.ArgumentParser(
     description='V6 fusion-only training on IEMOCAP with grad-norm '
                 'asymmetric modality-dropout curriculum (6 modalities).')
 
-parser.add_argument('--exp_name', default='v6_fusion_only', type=str)
+parser.add_argument('--exp_name', default='v6_fusion_only_varlen_linear', type=str)
 parser.add_argument('--results_dir',
                     default='./results_v6_fusion_dyna_iemocap/', type=str)
 parser.add_argument('--dataset', default='IEMOCAP', type=str)
@@ -264,12 +259,17 @@ parser.add_argument('--n_bottlenecks', default=8, type=int)
 parser.add_argument('--fusion_layer', default=0, type=int)
 parser.add_argument('--use_sparse_attn', type=_str2bool, default=True)
 parser.add_argument('--sparse_attn_variant', default='opt', type=str,
-                    choices=['opt', 'opt_strat', 'opt_strat_blk'])
+                    choices=['opt'],
+                    help='Restricted to ``opt`` — the orig backbone does '
+                         'not ship the stratified bmm variants.')
 parser.add_argument('--strat_block_size', default=8, type=int)
 parser.add_argument('--downsample_min_len', default=4, type=int)
 parser.add_argument('--per_modal_distill', action='store_true', default=False)
 parser.add_argument('--per_modal_downsample_min_len', default=4, type=int)
-parser.add_argument('--use_batched_fusion', type=_str2bool, default=True)
+parser.add_argument('--use_batched_fusion', type=_str2bool, default=False,
+                    help='IGNORED in the orig-model variant — always False. '
+                         'Kept for backwards-compatibility with shared '
+                         'driver scripts.')
 
 # Modality-drop curriculum
 parser.add_argument('--max_modality_drop', default=0.4, type=float,
@@ -359,6 +359,10 @@ print('Modalities:', modalities)
 fold_id = args.fold if args.fold is not None else 0
 print(f"IEMOCAP split id: {fold_id} (fold={args.fold})")
 
+# NOTE: use_batched_fusion=False is the whole point of this script
+# — it tells IEMOCAPDataset to leave T<max_seq_len modalities at their
+# native length (no zero-padding), and pad_sequence in the collate fn
+# then pads each modality to its own batch-max T at runtime.
 train_loader, val_loader, eval_loader = iemocap_get_dataloader(
     data_root=args.data_root,
     batch_size=args.batch_size,
@@ -368,7 +372,7 @@ train_loader, val_loader, eval_loader = iemocap_get_dataloader(
     train_shuffle=True,
     max_seq_len=args.max_seq_len,
     time_compression_ratio=args.time_compression_ratio,
-    use_batched_fusion=args.use_batched_fusion,
+    use_batched_fusion=False,
     available_sessions=args.available_sessions,
 )
 input_length = args.max_seq_len if args.max_seq_len > 0 else 600
@@ -400,9 +404,8 @@ inner = DualVideoBottleneckModelV6Downsample(
     sparse_attn_variant=args.sparse_attn_variant,
     strat_block_size=args.strat_block_size,
     downsample_min_len=args.downsample_min_len,
-    use_batched_fusion=args.use_batched_fusion,
-    per_modal_distill=args.per_modal_distill,
-    per_modal_downsample_min_len=args.per_modal_downsample_min_len,
+    # orig backbone forces this to False internally; pass for clarity.
+    use_batched_fusion=False,
 )
 
 model = V6IEMOCAPFusionDynaWrapper(inner, modalities)
@@ -457,10 +460,11 @@ writer = SummaryWriter(
 for epoch in range(num_epochs):
     mod_base = get_modality_curriculum(epoch, num_epochs, args.max_modality_drop)
 
-    # NON-DYNA: uniform per-modality Bernoulli dropout — same probability
-    # for all modalities (no gradnorm-asymmetric scaling).  Profiler hook
-    # below records grad norms ONLY for ``final_grad_norms`` diagnostic,
-    # it never influences drop probs.
+    # LINEAR (uniform) modality dropout: every modality uses the same
+    # mod_base probability — no gradnorm-based per-modality rescaling.
+    # The ModalityGradientProfiler hook below records grad norms ONLY for
+    # diagnostic ``final_grad_norms`` in results.json; it never feeds back
+    # into dropout probabilities.
     current_mod_probs = {m: mod_base for m in modalities}
     if mod_base > 0 and epoch % args.profile_update_freq == 0:
         if any(len(profiler.grad_norms[m]) > 0 for m in modalities):
@@ -565,8 +569,10 @@ final_grad_norms = profiler.get_norm_snapshot() \
 config = {
     'experiment_name': exp_name_full,
     'dataset': args.dataset,
-    'model_variant': 'v6_fusion_only',
-    'model_class': 'DualVideoBottleneckModelV6Downsample',
+    'model_variant': 'v6_fusion_only_varlen_linear',
+    'model_class': 'DualVideoBottleneckModelV6Downsample (orig)',
+    'backbone_module': 'multimodal_model.v6_downsample_orig',
+    'variable_length_inputs': True,
     'selector': 'NONE',
     'modality_drop_strategy': 'staggered_linear_base + uniform_per_modality',
     'fold': args.fold, 'split_id': fold_id,
@@ -587,9 +593,8 @@ config = {
     'sparse_attn_variant': args.sparse_attn_variant,
     'strat_block_size': args.strat_block_size,
     'downsample_min_len': args.downsample_min_len,
-    'use_batched_fusion': args.use_batched_fusion,
-    'per_modal_distill': args.per_modal_distill,
-    'per_modal_downsample_min_len': args.per_modal_downsample_min_len,
+    'use_batched_fusion': False,
+    # per_modal_* knobs are bmm-specific; orig backbone ignores them.
     'max_modality_drop': args.max_modality_drop,
     'profile_update_freq': args.profile_update_freq,
     'lr': args.lr, 'lr_schedule': args.lr_schedule,

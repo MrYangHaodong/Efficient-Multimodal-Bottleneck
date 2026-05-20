@@ -222,12 +222,32 @@ class TransformerBlock(nn.Module):
                 factor=factor, n_bottleneck=n_bottleneck,
                 bottleneck_head=bottleneck_head,
             )
+        elif sparse_attn_variant in ('opt', 'opt_strat', 'opt_strat_blk'):
+            # Dispatch the optimised ProbSparseAttentionOpt kernel from the
+            # bmm-batched file.  Despite living in *_opt_batched.py, the
+            # class itself is a plain nn.Module that operates on standard
+            # ``[B, L, D]`` tensors — exactly what the orig per-modality
+            # encoder feeds it.  Lazy-imported here to avoid a circular
+            # top-level dependency.
+            from multimodal_model.v6_downsample_opt_batched import (
+                ProbSparseAttentionOpt,
+            )
+            _strategy_map = {
+                'opt':           'global',
+                'opt_strat':     'stratified',
+                'opt_strat_blk': 'stratified_block',
+            }
+            self.attn = ProbSparseAttentionOpt(
+                hidden_size, num_heads, dropout=dropout_rate,
+                factor=factor, n_bottleneck=n_bottleneck,
+                bottleneck_head=bottleneck_head,
+                sampling_strategy=_strategy_map[sparse_attn_variant],
+                strat_block_size=strat_block_size,
+            )
         else:
-            # ProbSparseAttention is the only supported variant in this
-            # standalone file. The `sparse_attn_variant` / `strat_block_size`
-            # kwargs are accepted for back-compat but ignored.
-            AttnClass = ProbSparseAttention
-            self.attn = AttnClass(
+            # 'orig' (and any unknown value) falls through to the original
+            # ProbSparseAttention.
+            self.attn = ProbSparseAttention(
                 hidden_size,
                 num_heads,
                 dropout=dropout_rate,
@@ -938,6 +958,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                  use_interaction_matrix: bool = True,
                  use_holo_bias: bool = False,
                  holo_scale: float = 1.0,
+                 selector_downsample_factor: int = 1,
                  ):
         super().__init__()
 
@@ -967,6 +988,9 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
 
         self.selector_video_dim = video_low_dim if selector_video_source == 'low' else video_high_dim
         self.encoder_video_dim = video_low_dim if encoder_video_source == 'low' else video_high_dim
+        self.selector_downsample_factor = int(selector_downsample_factor)
+        assert self.selector_downsample_factor >= 1, \
+            f"selector_downsample_factor must be >=1, got {self.selector_downsample_factor}"
 
         self.modalities = cfg.modalities if hasattr(cfg, 'modalities') else ['video', 'audio', 'eeg']
         self.num_modalities = len(self.modalities)
@@ -1090,6 +1114,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             if not no_selector:
                 print(f"  ImprovedModalitySelector: dim_dict={self.selector_dim_dict}")
                 print(f"    num_classes={num_classes}, mlp_hidden={mselector_mlp_hidden_dim}")
+                print(f"    selector_downsample_factor={self.selector_downsample_factor}")
                 print(f"    lambda_probe={lambda_probe}, lambda_diversity={lambda_diversity}")
                 print(f"    use_interaction_matrix={use_interaction_matrix}  "
                       f"use_holo_bias={use_holo_bias}  holo_scale={holo_scale}")
@@ -1108,6 +1133,36 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             print(f"  Bottleneck: K//2 per modality → aggregator → upsample → K={n_bottlenecks}")
             print(f"  Per-modal distill: {per_modal_distill}")
             print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
+
+    # ------------------------------------------------------------------
+    # Selector temporal downsample helper
+    # ------------------------------------------------------------------
+    def downsample_selector_inputs(self, sel_inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Average-pool each modality along time by ``selector_downsample_factor``.
+
+        Input/output shape: ``[B, T, C]``.  When factor==1, returns the
+        dict unchanged.  When ``T < factor``, the modality is left at its
+        full length (avg_pool over the whole sequence would collapse it
+        to a single frame, which loses too much detail for very-short
+        time series).
+        """
+        f = self.selector_downsample_factor
+        if f <= 1:
+            return sel_inputs
+        out = {}
+        for m, x in sel_inputs.items():
+            if x.dim() != 3:
+                out[m] = x
+                continue
+            T = x.shape[1]
+            if T < f:
+                out[m] = x
+                continue
+            # [B, T, C] -> [B, C, T] -> avg_pool1d -> [B, C, T/f] -> [B, T/f, C]
+            xt = x.transpose(1, 2)
+            xt = F.avg_pool1d(xt, kernel_size=f, stride=f, ceil_mode=False)
+            out[m] = xt.transpose(1, 2).contiguous()
+        return out
 
     # ------------------------------------------------------------------
     # Selector freeze/unfreeze helpers
@@ -1192,6 +1247,8 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                         selector_inputs[modality] = low_dim_inputs[modality]
                     elif modality in high_dim_inputs:
                         selector_inputs[modality] = high_dim_inputs[modality]
+
+            selector_inputs = self.downsample_selector_inputs(selector_inputs)
 
             primary_idx, modality_weights, selected_modalities = self.modality_selector(
                 selector_inputs,

@@ -481,19 +481,28 @@ class BatchedModalityEncoder(nn.Module):
 
     def forward(self, x_stacked: torch.Tensor,
                 mod_indices: Optional[torch.Tensor] = None,
-                factor=None) -> torch.Tensor:
+                factor=None,
+                capture_layer: Optional[int] = None):
         """
         Args:
             x_stacked: [M_active, B, L, D]
             mod_indices: optional LongTensor [M_active], indices into M_total stored
                          param sets. None means use all M_total in original order.
+            capture_layer: optional int. If set, also returns the layer output
+                         AFTER index ``capture_layer`` (0-indexed). Returns
+                         (final_output, captured_output). When None, returns
+                         only the final output.
         Returns:
-            [M_active, B, L_out, D] — L_out = L // 2^num_layers when use_distill,
-                                       else L_out = L.
+            [M_active, B, L_out, D] (or tuple if capture_layer set)
         """
         del factor  # BatchedTransformerBlock doesn't take a factor arg in fwd
-        for layer in self.layers:
+        captured = None
+        for i, layer in enumerate(self.layers):
             x_stacked = layer(x_stacked, mod_indices)
+            if capture_layer is not None and i == capture_layer:
+                captured = x_stacked
+        if capture_layer is not None:
+            return x_stacked, captured
         return x_stacked
 
 
@@ -561,18 +570,28 @@ class BottleneckMLPAggregatorDownsample(nn.Module):
         self.norm     = nn.LayerNorm(d_model)
         self.upsample = nn.Linear(self.k_half, k_bottleneck)
 
-    def forward(self, bottleneck_list: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, bottleneck_list: List[torch.Tensor],
+                selected_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
             bottleneck_list: M tensors of shape [B, K_in, d]. Typically K_in == K//2
                 (after a fusion-distill layer halves the sequence). When the caller
                 hits a non-halving path (block stride=1, or short-T skip), K_in == K
                 and the upsample is bypassed.
+            selected_mask: optional [B, M] bool tensor. When given, gates for
+                non-selected (sample, modality) entries are forced to softmax
+                weight 0 by setting their logits to -inf, so only selected
+                modalities contribute to the fused bottleneck per sample.
         Returns:
             [B, K, d]
         """
         tokens = torch.stack(bottleneck_list, dim=1)           # [B, M, K_in, d]
-        gates  = F.softmax(self.gate(tokens), dim=1)           # [B, M, K_in, 1]
+        gate_logits = self.gate(tokens)                        # [B, M, K_in, 1]
+        if selected_mask is not None:
+            # mask: [B, M] -> [B, M, 1, 1] broadcast
+            m = selected_mask.bool().unsqueeze(-1).unsqueeze(-1)
+            gate_logits = gate_logits.masked_fill(~m, float('-inf'))
+        gates  = F.softmax(gate_logits, dim=1)                 # [B, M, K_in, 1]
         fused  = (gates * tokens).sum(dim=1)                   # [B, K_in, d]
         fused  = self.dropout(fused)
         # Apply upsample only when input came from a halved layer (K_in == K//2)
@@ -702,11 +721,26 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
         )
 
     def forward(self, inputs: Dict[str, torch.Tensor],
-                return_tokens: bool = False, factor=None):
+                return_tokens: bool = False, factor=None,
+                selected_mask: Optional[torch.Tensor] = None):
+        """If ``selected_mask`` is a [B, M_total] bool tensor, the fusion
+        runs on all available modalities but only the selected-per-sample
+        modalities contribute to the bottleneck aggregator and final GAP.
+        Indexed by ``self.all_modalities`` order — ``self._stack_inputs``
+        preserves that order, so column j in mask = stream j here.
+        """
         del factor
         available_modalities = [m for m in self.all_modalities if m in inputs]
         if len(available_modalities) == 0:
             raise ValueError('At least one modality must be provided')
+
+        # Align selected_mask to available_modalities order (subset of canonical)
+        active_mask = None
+        if selected_mask is not None:
+            avail_canon_idx = [self.modality_to_idx[m] for m in available_modalities]
+            avail_canon = torch.tensor(avail_canon_idx, device=selected_mask.device,
+                                        dtype=torch.long)
+            active_mask = selected_mask.index_select(1, avail_canon)  # [B, M_active] bool
 
         device = inputs[available_modalities[0]].device
         batch_size = inputs[available_modalities[0]].shape[0]
@@ -772,7 +806,8 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
                 else:
                     new_bn_list = [out[i, :, :k_half, :] for i in range(M_active)]
                     x = out[:, :, k_half:, :]
-                bottleneck = self.bottleneck_aggregator(new_bn_list)  # [B, K, H] via upsample
+                bottleneck = self.bottleneck_aggregator(
+                    new_bn_list, selected_mask=active_mask)  # [B, K, H] via upsample
             else:
                 # Non-halved path (block stride=1, or unexpected L_out). Slice the
                 # full original bn_len; aggregator detects width != k_half and
@@ -783,7 +818,8 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
                 else:
                     new_bn_list = [out[i, :, :bn_len, :] for i in range(M_active)]
                     x = out[:, :, bn_len:, :]
-                bottleneck = self.bottleneck_aggregator(new_bn_list)
+                bottleneck = self.bottleneck_aggregator(
+                    new_bn_list, selected_mask=active_mask)
 
         # Concat modalities along sequence dim, GAP for readout
         M_active_, B_, L_, H_ = x.shape
@@ -791,7 +827,15 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
         fused_tokens = self.final_norm(fused_tokens)
         if return_tokens:
             return fused_tokens
-        fused_repr = fused_tokens.mean(dim=1)
+        if active_mask is not None:
+            # Per-sample mask-aware GAP: only average tokens belonging to
+            # selected modalities. Expand [B, M_active] -> [B, M_active*L_].
+            tok_mask = active_mask.float().unsqueeze(-1).expand(B_, M_active_, L_)
+            tok_mask = tok_mask.reshape(B_, M_active_ * L_).unsqueeze(-1)
+            denom = tok_mask.sum(dim=1).clamp_min(1.0)
+            fused_repr = (fused_tokens * tok_mask).sum(dim=1) / denom
+        else:
+            fused_repr = fused_tokens.mean(dim=1)
         return self.output_projection(fused_repr)
 
 
@@ -852,6 +896,17 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                  use_interaction_matrix: bool = True,
                  use_holo_bias: bool = False,
                  holo_scale: float = 1.0,
+                 selector_downsample_factor: int = 1,
+                 selector_downsample_mode: str = 'avg_pool',
+                 selector_input_source: str = 'raw',
+                 selector_depth: int = 0,
+                 use_multi_pool: bool = False,
+                 use_tx_summarizer: bool = False,
+                 tx_d_model: int = 64,
+                 tx_nhead: int = 4,
+                 tx_layers: int = 1,
+                 tx_dim_ff: int = 128,
+                 tx_dropout: float = 0.1,
                  ):
         super().__init__()
 
@@ -880,6 +935,19 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
 
         self.selector_video_dim = video_low_dim if selector_video_source == 'low' else video_high_dim
         self.encoder_video_dim = video_low_dim if encoder_video_source == 'low' else video_high_dim
+        self.selector_downsample_factor = int(selector_downsample_factor)
+        assert self.selector_downsample_factor >= 1, \
+            f"selector_downsample_factor must be >=1, got {self.selector_downsample_factor}"
+        assert selector_downsample_mode in ('avg_pool', 'stride'), \
+            f"selector_downsample_mode must be 'avg_pool' or 'stride', got '{selector_downsample_mode}'"
+        self.selector_downsample_mode = selector_downsample_mode
+        assert selector_input_source in ('raw', 'enc_layer1', 'enc_layer2'), \
+            f"selector_input_source must be 'raw', 'enc_layer1', or 'enc_layer2', got '{selector_input_source}'"
+        self.selector_input_source = selector_input_source
+        # Map: 'enc_layer1' -> capture after layer 0, 'enc_layer2' -> after layer 1.
+        self._enc_capture_idx = {
+            'raw': None, 'enc_layer1': 0, 'enc_layer2': 1,
+        }[selector_input_source]
 
         self.modalities = cfg.modalities if hasattr(cfg, 'modalities') else ['video', 'audio', 'eeg']
         self.num_modalities = len(self.modalities)
@@ -913,11 +981,18 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             self.input_projectors[modality] = nn.Linear(input_dim, self.internal_dim)
 
         # ---- Improved modality selector
+        # selector input dim depends on selector_input_source:
+        #   'raw'           -> per-modality variates (small, 1-3 for HAR)
+        #   'enc_layer{N}'  -> encoder output dim (= self.pooled_dim/internal_dim)
         self.selector_dim_dict = {}
-        for m in self.modalities:
-            self.selector_dim_dict[m] = (
-                self.selector_video_dim if m == 'video' else self.variates.get(m, 256)
-            )
+        if self.selector_input_source == 'raw':
+            for m in self.modalities:
+                self.selector_dim_dict[m] = (
+                    self.selector_video_dim if m == 'video' else self.variates.get(m, 256)
+                )
+        else:
+            for m in self.modalities:
+                self.selector_dim_dict[m] = self.pooled_dim
 
         if not no_selector:
             self.modality_selector = ImprovedModalitySelector(
@@ -929,6 +1004,14 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                 use_interaction_matrix=use_interaction_matrix,
                 use_holo_bias=use_holo_bias,
                 holo_scale=holo_scale,
+                selector_depth=selector_depth,
+                use_multi_pool=use_multi_pool,
+                use_tx_summarizer=use_tx_summarizer,
+                tx_d_model=tx_d_model,
+                tx_nhead=tx_nhead,
+                tx_layers=tx_layers,
+                tx_dim_ff=tx_dim_ff,
+                tx_dropout=tx_dropout,
             )
         else:
             self.modality_selector = None
@@ -1024,6 +1107,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             if self.modality_selector is not None:
                 print(f"  ImprovedModalitySelector: dim_dict={self.selector_dim_dict}")
                 print(f"    num_classes={num_classes}, mlp_hidden={mselector_mlp_hidden_dim}")
+                print(f"    selector_downsample_factor={self.selector_downsample_factor}")
                 print(f"    use_interaction_matrix={use_interaction_matrix}  "
                       f"use_holo_bias={use_holo_bias}  holo_scale={holo_scale}")
                 if top_k is not None:
@@ -1033,6 +1117,44 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             else:
                 print(f"  No modality selector: all modalities used, uniform weights")
             print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
+
+    # ------------------------------------------------------------------
+    # Selector temporal downsample helper
+    # ------------------------------------------------------------------
+    def downsample_selector_inputs(self, sel_inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Compress each modality along time by ``selector_downsample_factor``.
+
+        Input/output shape: ``[B, T, C]``.  Factor==1 returns input unchanged;
+        for sequences shorter than the factor, the modality is left at full
+        length (avoid collapsing too aggressively for short windows).
+
+        Mode controlled by ``selector_downsample_mode``:
+          - ``avg_pool`` (default, legacy): ``F.avg_pool1d`` over time, smooth.
+          - ``stride``: keep every f-th token (no smoothing). Preserves sharp
+                        local peaks / bursts that avg-pool would wash out —
+                        useful when per-sample Shapley heterogeneity comes
+                        from short transients (e.g. activity transitions).
+        """
+        f = self.selector_downsample_factor
+        if f <= 1:
+            return sel_inputs
+        mode = getattr(self, 'selector_downsample_mode', 'avg_pool')
+        out = {}
+        for m, x in sel_inputs.items():
+            if x.dim() != 3:
+                out[m] = x
+                continue
+            T = x.shape[1]
+            if T < f:
+                out[m] = x
+                continue
+            if mode == 'stride':
+                out[m] = x[:, ::f, :].contiguous()
+            else:
+                xt = x.transpose(1, 2)
+                xt = F.avg_pool1d(xt, kernel_size=f, stride=f, ceil_mode=False)
+                out[m] = xt.transpose(1, 2).contiguous()
+        return out
 
     # ------------------------------------------------------------------
     # Selector freeze/unfreeze utilities
@@ -1091,13 +1213,19 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
     # ------------------------------------------------------------------
     # Batched per-modality encoding (single batched call across modalities)
     # ------------------------------------------------------------------
-    def _encode_modalities(self, projected_features, selected_modalities, base_factor):
+    def _encode_modalities(self, projected_features, selected_modalities, base_factor,
+                            capture_layer: Optional[int] = None):
         """Encode all modalities in one batched forward via BatchedModalityEncoder.
 
         Per-modality preprocessing (interpolate / layer_norm / temporal_pos_encoder)
         and post-processing (output_norm / encoder_output_dropout) still run in
         a Python loop because they are cheap pointwise ops with per-modality
         ModuleDict weights — only the heavy transformer-encoder body is batched.
+
+        When ``capture_layer`` is set, also returns a dict of intermediate
+        encoder outputs (after layer ``capture_layer``, 0-indexed), pre-output-
+        norm and pre-dropout. Used by selector_input_source='enc_layer*' to
+        feed mid-encoder features into the modality selector.
         """
         # Determine the active modality order (same iteration order as parent)
         active_mods = []
@@ -1108,7 +1236,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                 continue
             active_mods.append(modality)
         if not active_mods:
-            return {}
+            return ({}, {}) if capture_layer is not None else {}
 
         # ---- Per-modality preprocessing (interpolate, layer_norm, temporal_pos)
         pre_outputs = []
@@ -1133,7 +1261,12 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                 [self.modalities.index(m) for m in active_mods],
                 dtype=torch.long, device=x_stacked.device,
             )
-        x_stacked = self.batched_modality_encoder(x_stacked, mod_indices=mod_indices)
+        if capture_layer is not None:
+            x_stacked, captured = self.batched_modality_encoder(
+                x_stacked, mod_indices=mod_indices, capture_layer=capture_layer)
+            captured_dict = {m: captured[i] for i, m in enumerate(active_mods)}
+        else:
+            x_stacked = self.batched_modality_encoder(x_stacked, mod_indices=mod_indices)
 
         # ---- Per-modality post-processing (output_norm, dropout)
         processed = {}
@@ -1142,6 +1275,8 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             y = self.output_norms[modality](y)
             y = self.encoder_output_dropout(y)
             processed[modality] = y
+        if capture_layer is not None:
+            return processed, captured_dict
         return processed
 
     # ------------------------------------------------------------------
@@ -1155,41 +1290,17 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
         encoder_video_dict = (low_dim_inputs if self.encoder_video_source == 'low'
                               else high_dim_inputs)
 
-        # ---- Modality selection
-        if self.no_selector:
-            batch_size = next(iter(high_dim_inputs.values())).shape[0]
-            device = next(iter(high_dim_inputs.values())).device
-            modality_weights = torch.full(
-                (batch_size, self.num_modalities), 1.0 / self.num_modalities, device=device
-            )
-            primary_idx = torch.zeros(batch_size, dtype=torch.long, device=device)
-            selected_modalities = None
-        else:
-            selector_inputs = {}
-            for modality in self.modalities:
-                if modality == 'video':
-                    if 'video' in selector_video_dict:
-                        selector_inputs['video'] = selector_video_dict['video']
-                else:
-                    if modality in low_dim_inputs:
-                        selector_inputs[modality] = low_dim_inputs[modality]
-                    elif modality in high_dim_inputs:
-                        selector_inputs[modality] = high_dim_inputs[modality]
+        # Two execution paths:
+        #   A) selector_input_source == 'raw' (legacy)
+        #      selector first (on raw downsampled input) → encoder (on selected) → fusion
+        #   B) selector_input_source == 'enc_layer{N}' (new)
+        #      project → encoder on ALL (capture layer N) → selector(captured)
+        #      → fusion (with per-sample mask or filtered modalities)
+        base_factor = factor if factor is not None else self.factor
+        use_enc_features = (self._enc_capture_idx is not None
+                            and not self.no_selector)
 
-            primary_idx, modality_weights, selected_modalities = self.modality_selector(
-                selector_inputs,
-                top_k=self.top_k,
-                training=training,
-            )
-
-        # GRPO group-member override: outer wrapper passes an externally
-        # sampled K-subset (e.g. Gumbel-top-K of a different action sample).
-        # Honor it so the rest of the forward operates on those K modalities;
-        # modality_weights is left untouched so log_prob_action stays valid.
-        if override_selected_modalities is not None:
-            selected_modalities = override_selected_modalities
-
-        # ---- Per-modality input projection
+        # ---- Per-modality input projection (used in both paths)
         projected_features = {}
         for modality in self.modalities:
             if modality == 'video':
@@ -1203,10 +1314,58 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                         high_dim_inputs[modality]
                     )
 
-        # ---- Per-modality encoder (batched)
-        base_factor = factor if factor is not None else self.factor
-        processed_modalities = self._encode_modalities(
-            projected_features, selected_modalities, base_factor)
+        # ---- Modality selection
+        if self.no_selector:
+            batch_size = next(iter(high_dim_inputs.values())).shape[0]
+            device = next(iter(high_dim_inputs.values())).device
+            modality_weights = torch.full(
+                (batch_size, self.num_modalities), 1.0 / self.num_modalities, device=device
+            )
+            primary_idx = torch.zeros(batch_size, dtype=torch.long, device=device)
+            selected_modalities = None
+            processed_modalities = self._encode_modalities(
+                projected_features, selected_modalities, base_factor)
+        elif use_enc_features:
+            # PATH B: encoder first (on ALL modalities), capture layer N,
+            # use that as selector input. Then fusion uses full encoder output.
+            processed_modalities, captured = self._encode_modalities(
+                projected_features, None, base_factor,
+                capture_layer=self._enc_capture_idx)
+            # Optional temporal downsample of selector input (same factor).
+            selector_inputs = self.downsample_selector_inputs(captured)
+            primary_idx, modality_weights, selected_modalities = self.modality_selector(
+                selector_inputs, top_k=self.top_k, training=training)
+            # Note: with per_sample_topk=True, selected_modalities is None and
+            # the per-sample mask gates fusion. With per_sample_topk=False and
+            # selected_modalities != None, we filter processed for batch-mode.
+            if (selected_modalities is not None
+                    and not getattr(self.modality_selector, 'per_sample_topk', False)):
+                processed_modalities = {
+                    m: processed_modalities[m] for m in selected_modalities
+                    if m in processed_modalities
+                }
+        else:
+            # PATH A: legacy — selector first on raw, encoder filters by selected
+            selector_inputs = {}
+            for modality in self.modalities:
+                if modality == 'video':
+                    if 'video' in selector_video_dict:
+                        selector_inputs['video'] = selector_video_dict['video']
+                else:
+                    if modality in low_dim_inputs:
+                        selector_inputs[modality] = low_dim_inputs[modality]
+                    elif modality in high_dim_inputs:
+                        selector_inputs[modality] = high_dim_inputs[modality]
+            selector_inputs = self.downsample_selector_inputs(selector_inputs)
+            primary_idx, modality_weights, selected_modalities = self.modality_selector(
+                selector_inputs, top_k=self.top_k, training=training)
+            if override_selected_modalities is not None:
+                selected_modalities = override_selected_modalities
+            processed_modalities = self._encode_modalities(
+                projected_features, selected_modalities, base_factor)
+
+        # Expose for CGGM aux classifiers (per-modality post-encoder features).
+        self._last_processed_modalities = processed_modalities
 
         # ---- Fusion factor (optional per-modality weighting)
         if self.use_weighted_factor and not self.no_selector:
@@ -1219,8 +1378,16 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             fusion_factor = base_factor
 
         # ---- Bottleneck fusion + classifier
+        # If selector ran in per-sample mode it exposes a [B, M_total] mask;
+        # forward it to fusion so the aggregator + GAP only count selected
+        # modalities per sample.
+        selector_mask = None
+        if (self.modality_selector is not None
+                and getattr(self.modality_selector, 'per_sample_topk', False)):
+            selector_mask = getattr(self.modality_selector, '_selected_mask', None)
         fused = self.bottleneck_fusion(
-            processed_modalities, return_tokens=False, factor=fusion_factor
+            processed_modalities, return_tokens=False, factor=fusion_factor,
+            selected_mask=selector_mask,
         )
         output = self.regressor(fused)
 

@@ -48,7 +48,9 @@ sys.path.insert(0, _ROOT)
 from utils.helper_function import set_seed, count_model_parameters
 from utils.dataset_cfg import DaliaHAR
 from data.dataset_builder import HARDataset
-from utils.train_utils import AverageMeter, ProgressMeter, FocalLoss
+from utils.train_utils import (
+    AverageMeter, ProgressMeter, FocalLoss, ModalityGradientProfiler,
+)
 
 # Use the flat, single-class fusion model — opt sparse attn + batched fusion.
 from multimodal_model.v6_downsample_opt_batched import DualVideoBottleneckModelV6Downsample
@@ -369,6 +371,11 @@ inner = DualVideoBottleneckModelV6Downsample(
 model = V6FusionOnlyWrapper(inner, modalities, dataset_cfg.variates)
 model = model.to(device).float()
 
+# Attach ModalityGradientProfiler — non-dyna training doesn't use grad
+# norms to drive dropout, but tracking them lets us run gradnorm topK
+# eval on the resulting ckpt (same diagnostic dyna provides for free).
+profiler = ModalityGradientProfiler(inner, modalities)
+
 optimizer = optim.AdamW(model.parameters(), lr=args.lr)
 criterion = (FocalLoss(gamma=args.focal_gamma)
              if args.loss == 'focal' else nn.CrossEntropyLoss())
@@ -524,6 +531,10 @@ config = {
 with open(os.path.join(exp_dir, "config.json"), 'w') as f:
     json.dump(config, f, indent=4)
 
+final_grad_norms = (profiler.get_norm_snapshot()
+                     if any(len(profiler.grad_norms[m]) > 0 for m in modalities)
+                     else {})
+
 model_stats = {
     'experiment_name': exp_name_full, 'fold': args.fold,
     'best_val_acc': best_val_acc, 'best_val_f1': best_val_f1,
@@ -532,11 +543,14 @@ model_stats = {
                   'epoch': cold_best_epoch},
     'best_test_acc': float(test_acc),
     'best_test_f1': float(test_f1),
+    'final_grad_norms': final_grad_norms,
 }
 results_filename = (f"results_fold{args.fold}.json"
                     if args.fold is not None else "results.json")
 with open(os.path.join(exp_dir, results_filename), 'w') as f:
     json.dump(model_stats, f, indent=4)
+
+profiler.remove_hooks()
 
 print(f"\nBest Model (Epoch {best_epoch_val}): "
       f"val_acc={best_val_acc:.4f}  test_acc={test_acc:.4f}  test_f1={test_f1:.4f}")

@@ -10,7 +10,6 @@ Fold convention (Option B):
     - Each fold trains on 2 groups + evaluates on the 3rd.
 """
 
-
 class IEMOCAP(object):
     """
     IEMOCAP Dataset Configuration
@@ -41,6 +40,7 @@ class IEMOCAP(object):
         }
         self.video_high_dim = 1024
         self.video_low_dim  = 1024
+
 
 
 class MIMIC(object):
