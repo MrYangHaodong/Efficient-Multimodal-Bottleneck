@@ -1,0 +1,63 @@
+{
+  "ckpt": "/files1/haodong/MAESTRO_ttn_robustness_old/v6_organized/results_v6_fusion_dyna_iemocap/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/best_model_fold1.pth",
+  "fold": 1,
+  "split": "eval",
+  "estimator": "exact",
+  "n_samples": 673,
+  "modalities": [
+    "video",
+    "audio",
+    "text",
+    "mocap_hand",
+    "mocap_head",
+    "mocap_rotated"
+  ],
+  "per_modality": [
+    {
+      "modality": "video",
+      "mean_shapley": 0.25503525137901306,
+      "std_shapley": 0.8464284539222717
+    },
+    {
+      "modality": "audio",
+      "mean_shapley": 0.3239777386188507,
+      "std_shapley": 0.6637847423553467
+    },
+    {
+      "modality": "text",
+      "mean_shapley": -0.1777193546295166,
+      "std_shapley": 1.4110674858093262
+    },
+    {
+      "modality": "mocap_hand",
+      "mean_shapley": 0.11468642204999924,
+      "std_shapley": 0.32504570484161377
+    },
+    {
+      "modality": "mocap_head",
+      "mean_shapley": 0.1424058973789215,
+      "std_shapley": 0.33216819167137146
+    },
+    {
+      "modality": "mocap_rotated",
+      "mean_shapley": 0.1428011804819107,
+      "std_shapley": 0.41614553332328796
+    }
+  ],
+  "shapley_ranking": [
+    "audio",
+    "video",
+    "mocap_rotated",
+    "mocap_head",
+    "mocap_hand",
+    "text"
+  ],
+  "top1_hist": {
+    "video": 0.2213967310549777,
+    "audio": 0.16047548291233285,
+    "text": 0.537890044576523,
+    "mocap_hand": 0.01634472511144131,
+    "mocap_head": 0.02526002971768202,
+    "mocap_rotated": 0.03863298662704309
+  }
+}

@@ -1,5 +1,11 @@
 # Model checkpoints (4 GB)
 model_chkpt/
+# Allow specific tier-A V6+TierA IEMOCAP checkpoint+Shapley bundle (78 MB)
+!model_chkpt/
+!model_chkpt/IEMOCAP/
+!model_chkpt/IEMOCAP/multimodal_model/
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/**
 
 # Training / eval logs
 logs/
@@ -19,6 +25,9 @@ __pycache__/
 *.pt
 *.h5
 *.hdf5
+# Re-allow files inside the whitelisted tierA bundle
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/*.npz
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/*.pth
 
 # OS artifacts
 .DS_Store
