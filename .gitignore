@@ -4,8 +4,8 @@ model_chkpt/
 !model_chkpt/
 !model_chkpt/IEMOCAP/
 !model_chkpt/IEMOCAP/multimodal_model/
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/**
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/**
 
 # Training / eval logs
 logs/
@@ -26,8 +26,8 @@ __pycache__/
 *.h5
 *.hdf5
 # Re-allow files inside the whitelisted tierA bundle
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/*.npz
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap_tierA_lr3e5/*.pth
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/*.npz
+!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/*.pth
 
 # OS artifacts
 .DS_Store
