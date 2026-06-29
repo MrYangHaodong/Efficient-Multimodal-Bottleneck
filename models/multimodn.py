@@ -135,7 +135,7 @@ class GenericMultiModNClassifier(nn.Module):
             m: nn.Linear(in_dim(m), d_model) for m in self.modalities
         })
         self.pos_embedding = nn.Parameter(
-            torch.zeros(1, input_length, d_model))
+            torch.zeros(1, input_length + 64, d_model))
         nn.init.trunc_normal_(self.pos_embedding, std=0.02)
 
         self.encoders = nn.ModuleDict({

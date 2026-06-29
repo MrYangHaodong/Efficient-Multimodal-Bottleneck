@@ -95,7 +95,7 @@ class GenericShaSpecClassifier(nn.Module):
             m: nn.Linear(in_dim(m), d_model) for m in self.modalities
         })
         self.pos_embedding = nn.Parameter(
-            torch.zeros(1, input_length, d_model))
+            torch.zeros(1, input_length + 64, d_model))
         self.shared_enc = _TemporalEncoder(d_model, nhead, num_layers, dropout)
         self.specific_encoders = nn.ModuleDict({
             m: _TemporalEncoder(d_model, nhead, num_layers, dropout)

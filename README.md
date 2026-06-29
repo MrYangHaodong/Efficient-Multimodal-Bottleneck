@@ -11,10 +11,10 @@ Datasets: IEMOCAP, DaliaHAR, PAMAP2, DSADS, EAV, CMU-MOSEI.
 ## Repository structure
 
 ```
-models/                  ONE file per model (11): seqA.py (sequential gated-bottleneck fusion) +
+models/                  ONE file per model (12): seqA.py (sequential gated-bottleneck fusion) +
                          dmbf, l2r, mmee, crema, adamml, dynmm, shaspec, multimodn, decalign,
-                         crossattn. (+ helpers fusion_bmm_parallel.py, crossmodal_transformer.py)
-training/                ONE trainer per model (11): train each on all 6 datasets via
+                         crossattn, dymo. (+ helpers fusion_bmm_parallel.py, crossmodal_transformer.py)
+training/                ONE trainer per model (12): train each on all 6 datasets via
                          `--dataset {iemocap,daliahar,pamap2,dsads,eav,mosei}`. e.g.
                          `python training/seqA.py --dataset iemocap --fold 0 --results_dir runs/`
 data/                    Dataset loaders (IEMOCAP / CMU-MOSEI / EAV / HAR; SAX tokenization, …)
