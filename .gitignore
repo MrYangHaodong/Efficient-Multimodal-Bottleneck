@@ -4,7 +4,7 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# ---- Large binaries / artifacts (this repo = code + key results/plots only) ----
+# ---- Large binaries / archives (repo = code + key results/plots only) ----
 *.pth
 *.pt
 *.ckpt
@@ -13,6 +13,10 @@ __pycache__/
 *.h5
 *.hdf5
 *.pkl
+*.tar
+*.tar.gz
+*.zip
+model_chkpt/
 
 # ---- Logs / runs ----
 logs/
@@ -29,13 +33,3 @@ Thumbs.db
 !results/figures/*.png
 !results/tables/*.json
 !results/tables/*.txt
-
-# ---- Pretrained checkpoint bundle (whitelisted, ~78 MB IEMOCAP V6+TierA) ----
-model_chkpt/
-!model_chkpt/
-!model_chkpt/IEMOCAP/
-!model_chkpt/IEMOCAP/multimodal_model/
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/**
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/*.npz
-!model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/*.pth
