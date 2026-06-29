@@ -15,7 +15,7 @@ import torch, torch.nn as nn, torch.nn.functional as F
 from sklearn.metrics import f1_score
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data.CMU_MOSEI.get_data_mmsa import get_mmsa_dataloader, FEATURE_DIMS
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import (
+from models.seqA import (
     DualVideoBottleneckModelV6Downsample)
 
 ap = argparse.ArgumentParser()

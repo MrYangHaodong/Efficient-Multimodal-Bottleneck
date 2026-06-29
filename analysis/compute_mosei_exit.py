@@ -21,7 +21,7 @@ _CM = os.path.dirname(_HERE)                      # clean_models
 sys.path.insert(0, _CM)
 from utils.helper_function import set_seed                                    # noqa: E402
 from data.CMU_MOSEI.get_data import get_dataloader, CMUMOSEIDataset            # noqa: E402
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import (  # noqa: E402
+from models.seqA import (  # noqa: E402
     DualVideoBottleneckModelV6Downsample)
 
 dev = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

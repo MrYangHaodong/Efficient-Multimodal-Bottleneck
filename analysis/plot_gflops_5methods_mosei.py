@@ -22,7 +22,7 @@ def measure(model, run_once):
 
 # ---------- DMBF full GFLOPs (tcr=1, T=50) ----------
 from data.CMU_MOSEI.get_data import get_dataloader as mget, FEATURE_DIMS, NUM_CLASSES
-from multimodal_model.dmbf_baseline import DMBFClassifier
+from models.dmbf import DMBFClassifier
 mods = ['vision', 'audio', 'text']
 _, _, el = mget(batch_size=4, num_workers=2, modalities=mods, split_id=0, train_shuffle=False,
                 max_seq_len=50, time_compression_ratio=1, use_batched_fusion=True, task='classification2')
@@ -35,7 +35,7 @@ print(f"DMBF full GFLOPs = {G_DMBF:.4f}")
 
 # ---------- MMEE depth GFLOPs (tcr=4) at L=1 and L=6 -> linear per-layer ----------
 from ee_data import build_loaders
-from multimodal_model.mmee_baseline import MMEEClassifier
+from models.mmee import MMEEClassifier
 a = SimpleNamespace(dataset='mosei', max_seq_len=50, time_compression_ratio=4, fold=0, batch_size=4, num_workers=2)
 _, _, mel, cfg, in_len, in_mode, _, unpack = build_loaders(a)
 x, _y = unpack(next(iter(mel)), dev); x1 = x[:1]

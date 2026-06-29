@@ -13,7 +13,7 @@ import torch
 _HERE = os.path.dirname(os.path.abspath(__file__)); _CM = os.path.dirname(_HERE)
 sys.path.insert(0, _CM)
 from data.CMU_MOSEI.get_data import FEATURE_DIMS, CMUMOSEIDataset            # noqa: E402
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import (  # noqa: E402
+from models.seqA import (  # noqa: E402
     DualVideoBottleneckModelV6Downsample)
 
 DEV = torch.device('cuda:0')
@@ -101,7 +101,7 @@ def build_base_fwd(method):
     C = sum(cfg.variates[m] for m in cfg.modalities)
     x = torch.randn(1, T, C).to(DEV)
     if method == 'crossattn':
-        from multimodal_model.cross_attn_v6_clf import CrossAttnV6Clf
+        from models.crossattn import CrossAttnV6Clf
         m = CrossAttnV6Clf(cfg=cfg, num_classes=2, input_length=T, d_model=cj['d_model'], nhead=cj['nhead'],
             num_layers_per_modal=cj['num_layers_per_modal'], num_layers=cj['num_layers'], dropout=cj['dropout'],
             base_factor=cj['base_factor'], num_experts=cj['num_experts'], use_sparse_attn=cj['use_sparse_attn'],
@@ -110,14 +110,14 @@ def build_base_fwd(method):
             verbose=False).to(DEV).eval()
         return lambda: m(x, modality_dropout_prob=0.0, training=False)
     if method == 'multimodn':
-        from multimodal_model.multimodn_baseline import GenericMultiModNClassifier
+        from models.multimodn import GenericMultiModNClassifier
         m = GenericMultiModNClassifier(cfg=cfg, input_length=T, input_mode='float', d_model=cj['d_model'],
             nhead=cj['nhead'], num_layers=cj['num_layers'], num_layers_fus=cj['num_layers_fus'],
             num_layers_pred=cj['num_layers_pred'], dropout=cj['dropout'],
             state_size=(cj.get('state_size') or None)).to(DEV).eval()
         return lambda: m(x, modality_dropout_probs=None, training=False)
     if method == 'decalign':
-        from multimodal_model.decalign_baseline import build_decalign
+        from models.decalign import build_decalign
         m = build_decalign(cfg=cfg, input_length=T, d_model=cj['d_model'], nhead=cj['nhead'], num_layers=cj['num_layers'],
             num_prototypes=cj['num_prototypes'], ot_reg=cj['ot_reg'], ot_num_iters=cj['ot_num_iters'],
             conv1d_kernel=cj['conv1d_kernel'], dropout=cj['dropout'], alpha1=cj['alpha1'], alpha2=cj['alpha2'],
@@ -126,7 +126,7 @@ def build_base_fwd(method):
         m.compute_decoupling_loss = m.compute_hetero_loss = m.compute_homo_loss = lambda *a, **k: z
         return lambda: m(x)
     if method == 'shaspec':
-        from multimodal_model.shaspec_baseline import GenericShaSpecClassifier
+        from models.shaspec import GenericShaSpecClassifier
         m = GenericShaSpecClassifier(cfg=cfg, input_length=T, input_mode='float', d_model=cj['d_model'],
             nhead=cj['nhead'], num_layers=cj['num_layers'], dropout=cj['dropout']).to(DEV).eval()
         return lambda: m(x)

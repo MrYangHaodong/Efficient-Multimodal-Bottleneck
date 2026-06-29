@@ -13,7 +13,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _CM = os.path.dirname(_HERE)
 from utils.helper_function import set_seed
 from data.CMU_MOSEI.get_data import get_dataloader, CMUMOSEIDataset, FEATURE_DIMS
 from data.CMU_MOSEI.get_data_mmsa import mosei_metrics
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import DualVideoBottleneckModelV6Downsample
+from models.seqA import DualVideoBottleneckModelV6Downsample
 
 dev = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 MODS = list(CMUMOSEIDataset.ALL_MODALITIES); M = len(MODS); T = 50

@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.helper_function import set_seed
 from utils.dataset_cfg import DaliaHAR, WESAD
 from data.dataset_builder import HARDataset
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import (
+from models.seqA import (
     DualVideoBottleneckModelV6Downsample)
 
 dev = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')

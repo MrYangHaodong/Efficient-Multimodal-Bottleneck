@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.helper_function import set_seed
 from utils.dataset_cfg import DSADS
 from data.dataset_builder import DSADSDataset
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import DualVideoBottleneckModelV6Downsample
+from models.seqA import DualVideoBottleneckModelV6Downsample
 
 dev = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu'); set_seed(42)
 TAUS = [0.0, 0.02, 0.05, 0.08, 0.12, 0.18, 0.25, 0.35, 0.5, 0.7, 0.9, 1.2, 1.6, 2.0, 10.0]

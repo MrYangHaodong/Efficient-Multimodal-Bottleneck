@@ -22,7 +22,7 @@ from data.IEMOCAP.get_data import (
     get_dataloader as iemocap_get_dataloader,
     FEATURE_DIMS, NUM_CLASSES, IEMOCAPDataset,
 )
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import (
+from models.seqA import (
     DualVideoBottleneckModelV6Downsample,
 )
 

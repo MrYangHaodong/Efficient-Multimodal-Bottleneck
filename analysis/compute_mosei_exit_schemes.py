@@ -12,7 +12,7 @@ from sklearn.metrics import f1_score
 _HERE = os.path.dirname(os.path.abspath(__file__)); _CM = os.path.dirname(_HERE); sys.path.insert(0, _CM)
 from utils.helper_function import set_seed
 from data.CMU_MOSEI.get_data import get_dataloader, CMUMOSEIDataset
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import DualVideoBottleneckModelV6Downsample
+from models.seqA import DualVideoBottleneckModelV6Downsample
 
 dev = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu'); set_seed(42)
 MODS = list(CMUMOSEIDataset.ALL_MODALITIES); M = len(MODS); NUMC = 2; T = 50

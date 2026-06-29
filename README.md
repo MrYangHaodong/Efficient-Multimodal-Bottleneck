@@ -11,29 +11,29 @@ Datasets: IEMOCAP, DaliaHAR, PAMAP2, DSADS, EAV, CMU-MOSEI.
 ## Repository structure
 
 ```
-multimodal_model/        Model architectures (importable package)
-                           - seqA sequential gated-bottleneck fusion (v6_downsample…seqfusion)
-                           - baselines: DMBF, L2R, MMEE, CREMA, AdaMML, DynMM (+ faithful original
-                             DynMM: dynmm_orig_baseline.py), ShaSpec, MultiModN, DecAlign, …
+models/                  ONE file per model (11): seqA.py (sequential gated-bottleneck fusion) +
+                         dmbf, l2r, mmee, crema, adamml, dynmm, shaspec, multimodn, decalign,
+                         crossattn. (+ helpers fusion_bmm_parallel.py, crossmodal_transformer.py)
+training/                ONE trainer per model (11): train each on all 6 datasets via
+                         `--dataset {iemocap,daliahar,pamap2,dsads,eav,mosei}`. e.g.
+                         `python training/seqA.py --dataset iemocap --fold 0 --results_dir runs/`
 data/                    Dataset loaders (IEMOCAP / CMU-MOSEI / EAV / HAR; SAX tokenization, …)
 utils/                   Configs, helpers, perf/FLOP utilities
 selector/                Modality-selection / routing components
-common/                  Shared training helpers (ee_data.py loader factory,
-                         compute_vlo_vs_random.py, qmf_pdf_late_fusion.py) + configs
-
-training/
-  seqA/                  Core seqA training scripts (main_v6_*_seqfusion_late_fusion.py, per dataset)
-  baselines/             Baseline-method training scripts (main_<method>_*.py)
+common/                  Shared loader factory (ee_data.build_loaders — unifies all 6 datasets,
+                         float + SAX), loader_utils, compute_vlo_vs_random, dynmm_branches.json, …
 analysis/                Adaptive early-exit curves, LSMI R/U/S interaction estimation,
                          val-LOO / Shapley pruning, GFLOPs–accuracy frontiers, aggregation
 scripts/                 Shell orchestrators (run_*.sh): multi-GPU, multi-fold/seed, resume-guarded
 external_baselines/      Vendored reference implementations (CREMA, multi-modal-early-exit)
-
 results/
   figures/               Key plots (GFLOPs–accuracy frontiers, exit-scheme comparisons, …)
   tables/                Key result JSONs / summary tables (aggregated metrics, exit curves)
 environment.yml          Conda environment (PyTorch 2.5.1 / CUDA 12.1 / Python 3.10)
 ```
+
+Every model is one `models/<m>.py` + one `training/<m>.py`; all trainers share
+`common.ee_data.build_loaders` (one data pipeline for all 6 datasets).
 
 ## Notes
 - This repo is **code + key results/plots only** — trained checkpoints (`*.pth`), packed data

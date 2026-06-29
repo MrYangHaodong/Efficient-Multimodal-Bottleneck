@@ -60,7 +60,7 @@ def measure(fwd):
 def build_fwd(method, cj, cfg, C):
     x = torch.randn(1, T, C).to(DEV)                       # EAV: float input
     if method == 'crossattn':
-        from multimodal_model.cross_attn_v6_clf import CrossAttnV6Clf
+        from models.crossattn import CrossAttnV6Clf
         m = CrossAttnV6Clf(cfg=cfg, num_classes=cfg.num_classes, input_length=T, d_model=cj['d_model'],
             nhead=cj['nhead'], num_layers_per_modal=cj['num_layers_per_modal'], num_layers=cj['num_layers'],
             dropout=cj['dropout'], base_factor=cj['base_factor'], num_experts=cj['num_experts'],
@@ -69,14 +69,14 @@ def build_fwd(method, cj, cfg, C):
             per_modal_downsample_min_len=cj['per_modal_downsample_min_len'], verbose=False).to(DEV).eval()
         return lambda: m(x, modality_dropout_prob=0.0, training=False)
     if method == 'multimodn':
-        from multimodal_model.multimodn_baseline import GenericMultiModNClassifier
+        from models.multimodn import GenericMultiModNClassifier
         m = GenericMultiModNClassifier(cfg=cfg, input_length=T, input_mode='float',
             d_model=cj['d_model'], nhead=cj['nhead'], num_layers=cj['num_layers'],
             num_layers_fus=cj['num_layers_fus'], num_layers_pred=cj['num_layers_pred'],
             dropout=cj['dropout'], state_size=(cj.get('state_size') or None)).to(DEV).eval()
         return lambda: m(x, modality_dropout_probs=None, training=False)
     if method == 'decalign':
-        from multimodal_model.decalign_baseline import build_decalign
+        from models.decalign import build_decalign
         m = build_decalign(cfg=cfg, input_length=T, d_model=cj['d_model'], nhead=cj['nhead'],
             num_layers=cj['num_layers'], num_prototypes=cj['num_prototypes'], ot_reg=cj['ot_reg'],
             ot_num_iters=cj['ot_num_iters'], conv1d_kernel=cj['conv1d_kernel'], dropout=cj['dropout'],
@@ -85,13 +85,13 @@ def build_fwd(method, cj, cfg, C):
         m.compute_decoupling_loss = m.compute_hetero_loss = m.compute_homo_loss = lambda *a, **k: z
         return lambda: m(x)
     if method == 'shaspec':
-        from multimodal_model.shaspec_baseline import GenericShaSpecClassifier
+        from models.shaspec import GenericShaSpecClassifier
         m = GenericShaSpecClassifier(cfg=cfg, input_length=T, input_mode='float',
             d_model=cj['d_model'], nhead=cj['nhead'], num_layers=cj['num_layers'],
             dropout=cj['dropout']).to(DEV).eval()
         return lambda: m(x)
     if method == 'dymo':
-        from multimodal_model.crossmodal_transformer import CrossModalTransformer
+        from models.crossmodal_transformer import CrossModalTransformer
         m = CrossModalTransformer(cfg=cfg, input_length=T, input_mode='float',
             d_model=cj.get('d_model', 128), nhead=cj.get('nhead', 8),
             num_enc_layers=cj.get('num_enc_layers', 3), num_fusion_layers=cj.get('num_fusion_layers', 3),

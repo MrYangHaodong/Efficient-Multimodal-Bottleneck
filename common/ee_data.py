@@ -9,7 +9,7 @@ where unpack(batch, device) -> (x [B,T,sum(variates)], y [B]).
 import os
 import torch
 from torch.utils.data import DataLoader
-from multimodal_model.crossmodal_transformer import _concat_iemocap
+from common.loader_utils import _concat_iemocap
 
 
 def build_loaders(args):

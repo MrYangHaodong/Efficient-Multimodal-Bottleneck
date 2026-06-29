@@ -19,7 +19,7 @@ from sklearn.metrics import f1_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.helper_function import set_seed
-from multimodal_model.v6_downsample_opt_batched_late_fusion_seqfusion import (
+from models.seqA import (
     DualVideoBottleneckModelV6Downsample)
 
 set_seed(42)

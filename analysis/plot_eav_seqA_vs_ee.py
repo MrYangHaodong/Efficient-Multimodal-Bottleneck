@@ -19,8 +19,8 @@ R = os.path.dirname(os.path.abspath(__file__)); _CM = os.path.dirname(R)
 sys.path.insert(0, _CM)
 torch.backends.mha.set_fastpath_enabled(False)
 from data.EAV.get_data import FEATURE_DIMS, EAVDataset                       # noqa: E402
-from multimodal_model.mmee_baseline import MMEEClassifier                     # noqa: E402
-from multimodal_model.dmbf_baseline import DMBFClassifier                     # noqa: E402
+from models.mmee import MMEEClassifier                     # noqa: E402
+from models.dmbf import DMBFClassifier                     # noqa: E402
 
 TRAIN = os.path.join(_CM, 'train')
 MODS = list(EAVDataset.ALL_MODALITIES); M = 3; T = 128; NUMC = 5
