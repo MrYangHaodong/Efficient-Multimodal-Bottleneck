@@ -453,7 +453,8 @@ class BatchedModalityEncoder(nn.Module):
                  use_sparse_attn: bool = False, n_bottleneck: int = 0,
                  factor: int = 5, sparse_attn_variant: str = 'orig',
                  use_distill: bool = False,
-                 strat_block_size: int = 8):
+                 strat_block_size: int = 8,
+                 mlp_ratio: float = 2.0):
         super().__init__()
         # Lazy import to avoid circular dependency
         from multimodal_model.fusion_bmm_parallel import BatchedTransformerBlock
@@ -467,12 +468,12 @@ class BatchedModalityEncoder(nn.Module):
         self.layers = nn.ModuleList([
             BatchedTransformerBlock(
                 M_total=M_total, hidden_size=d_model, num_heads=nhead,
-                mlp_dim=int(d_model * 2.0), dropout_rate=dropout,
+                mlp_dim=int(d_model * mlp_ratio), dropout_rate=dropout,
                 use_distill=use_distill,
                 use_sparse_attn=use_sparse_attn,
                 factor=factor,
                 n_bottleneck=n_bottleneck,
-                bottleneck_head=True,
+                bottleneck_head=False,
                 sampling_strategy=sampling_strategy,
                 strat_block_size=strat_block_size,
             )
@@ -636,6 +637,11 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
                  sparse_attn_variant: str = 'orig',
                  downsample_min_len: int = 4,
                  strat_block_size: int = 8,
+                 bottleneck_init_mode: str = 'random',
+                 add_pos_embeds: bool = False,
+                 pos_embeds_max_len: int = 256,
+                 pos_embed_mode: str = 'full',
+                 share_fusion_params: bool = False,
                  **_unused_kwargs):
         super().__init__()
         if use_sparse_moe:
@@ -643,6 +649,9 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
         if use_triton:
             raise NotImplementedError('Triton not compatible with batched LN.')
         assert n_bottlenecks % 2 == 0, 'n_bottlenecks must be even for K//2 split'
+        assert bottleneck_init_mode in ('random', 'modal_mean_sinpe'), \
+            f"bottleneck_init_mode must be 'random' or 'modal_mean_sinpe', got '{bottleneck_init_mode}'"
+        self.bottleneck_init_mode = bottleneck_init_mode
 
         # Lazy import to avoid circular dependency
         from multimodal_model.fusion_bmm_parallel import BatchedTransformerBlock
@@ -670,6 +679,40 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
             else:
                 self.input_projections[modality] = nn.Identity()
 
+        # Per-modality additive PE at fusion input.
+        # Modes:
+        #   'full'      — pos_embeds[m] shape [1, L, H] per modality (Plan A original).
+        #                 Cost: M × L × H (e.g., 6 × 128 × 128 ≈ 98k for IEMOCAP).
+        #   'decoupled' — shared temporal_pe [1, L, H] + mod_id_pe [M, H] (our_models.py style).
+        #                 Cost: L × H + M × H (e.g., 128×128 + 6×128 ≈ 17k for IEMOCAP).
+        #   'id_only'   — only mod_id_pe [M, H], skip temporal_pe.
+        #                 Cost: M × H (e.g., 6 × 128 = 768 for IEMOCAP).
+        #   'gated_id'  — id_only modulated by learnable σ(pe_gate). gate init=0 → σ=0.5.
+        #                 Gradient drives gate→1 if PE helps (IEMOCAP), →0 if harmful (DaliaHAR).
+        #                 Cost: M × H + 1.
+        self.add_pos_embeds = add_pos_embeds
+        self.pos_embed_mode = pos_embed_mode
+        if add_pos_embeds:
+            assert pos_embed_mode in ('full', 'decoupled', 'id_only', 'gated_id'), \
+                f"pos_embed_mode must be 'full'/'decoupled'/'id_only'/'gated_id', got {pos_embed_mode!r}"
+            if pos_embed_mode == 'full':
+                self.pos_embeds = nn.ParameterDict({
+                    m: nn.Parameter(torch.randn(1, pos_embeds_max_len, hidden_size) * 0.02)
+                    for m in self.all_modalities
+                })
+            elif pos_embed_mode == 'decoupled':
+                self.temporal_pe = nn.Parameter(
+                    torch.randn(1, pos_embeds_max_len, hidden_size) * 0.02)
+                self.mod_id_pe = nn.Embedding(self.M_total, hidden_size)
+                nn.init.normal_(self.mod_id_pe.weight, mean=0.0, std=0.02)
+            elif pos_embed_mode == 'id_only':
+                self.mod_id_pe = nn.Embedding(self.M_total, hidden_size)
+                nn.init.normal_(self.mod_id_pe.weight, mean=0.0, std=0.02)
+            else:  # 'gated_id'
+                self.mod_id_pe = nn.Embedding(self.M_total, hidden_size)
+                nn.init.normal_(self.mod_id_pe.weight, mean=0.0, std=0.02)
+                self.pe_gate = nn.Parameter(torch.zeros(1))  # σ(0) = 0.5
+
         # Pre-fusion blocks (lyr < fusion_layer): no downsample, no bottleneck
         # Fusion blocks (lyr >= fusion_layer): use_distill=True (stride=2 conv+pool)
         _strategy_map = {
@@ -689,14 +732,35 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
                 bottleneck_head=bottleneck_head_pos,
                 sampling_strategy=sampling_strategy,
                 strat_block_size=strat_block_size,
+                share_params=share_fusion_params,
             )
             for lyr in range(num_layers)
         ])
 
         if use_bottleneck:
-            self.bottleneck = nn.Parameter(
-                torch.randn(1, n_bottlenecks, hidden_size) * 0.02
-            )
+            if bottleneck_init_mode == 'modal_mean_sinpe':
+                # Data-driven bottleneck: at forward time, compute per-sample
+                # modal-mean over (M, T) → [B, H], replicate to k positions, and
+                # add a deterministic sinusoidal positional encoding to break
+                # symmetry between the k tokens. No learnable bottleneck
+                # parameter; zero seed-dependence on bottleneck init.
+                pe_pos = torch.arange(n_bottlenecks).float().unsqueeze(1)
+                pe_div = torch.exp(
+                    torch.arange(0, hidden_size, 2).float()
+                    * -(math.log(10000.0) / hidden_size)
+                )
+                pe = torch.zeros(n_bottlenecks, hidden_size)
+                pe[:, 0::2] = torch.sin(pe_pos * pe_div)
+                pe[:, 1::2] = torch.cos(pe_pos * pe_div)
+                self.register_buffer(
+                    'bottleneck_pe',
+                    (pe * 0.1).unsqueeze(0),       # [1, k, H], scale 0.1 perturbation
+                )
+                self.bottleneck = None             # no learnable bottleneck
+            else:
+                self.bottleneck = nn.Parameter(
+                    torch.randn(1, n_bottlenecks, hidden_size) * 0.02
+                )
             # K//2 → K via Linear upsample
             self.bottleneck_aggregator = BottleneckMLPAggregatorDownsample(
                 d_model=hidden_size,
@@ -715,10 +779,28 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
 
     def _stack_inputs(self, inputs, available_modalities):
         # Project each modality and stack to [M_active, B, L, H]
-        return torch.stack(
-            [self.input_projections[m](inputs[m]) for m in available_modalities],
-            dim=0,
-        )
+        projected = []
+        for m in available_modalities:
+            proj = self.input_projections[m](inputs[m])    # [B, L, H]
+            if self.add_pos_embeds:
+                L = proj.shape[1]
+                if self.pos_embed_mode == 'full':
+                    proj = proj + self.pos_embeds[m][:, :L]
+                elif self.pos_embed_mode == 'decoupled':
+                    m_idx = self.modality_to_idx[m]
+                    mid = self.mod_id_pe.weight[m_idx].view(1, 1, -1)
+                    proj = proj + self.temporal_pe[:, :L] + mid
+                elif self.pos_embed_mode == 'id_only':
+                    m_idx = self.modality_to_idx[m]
+                    mid = self.mod_id_pe.weight[m_idx].view(1, 1, -1)
+                    proj = proj + mid
+                else:  # 'gated_id'
+                    m_idx = self.modality_to_idx[m]
+                    mid = self.mod_id_pe.weight[m_idx].view(1, 1, -1)
+                    gate = torch.sigmoid(self.pe_gate)
+                    proj = proj + gate * mid
+            projected.append(proj)
+        return torch.stack(projected, dim=0)
 
     def forward(self, inputs: Dict[str, torch.Tensor],
                 return_tokens: bool = False, factor=None,
@@ -754,7 +836,22 @@ class SimpleMBTFusionAdaptiveMLPDownsampleBmm(nn.Module):
 
         x = self._stack_inputs(inputs, available_modalities)        # [M, B, L, H]
 
-        if self.use_bottleneck and self.bottleneck is not None:
+        if self.use_bottleneck and self.bottleneck_init_mode == 'modal_mean_sinpe':
+            # Per-sample modal mean over (M_active, L) → [B, H]; respect active_mask
+            # (only-selected modalities contribute) if provided.
+            if active_mask is not None:
+                # active_mask: [B, M_active] → broadcast to [M_active, B, 1, 1]
+                m_mask = active_mask.t().unsqueeze(-1).unsqueeze(-1).float()
+                weighted = (x * m_mask).sum(dim=(0, 2))                        # [B, H]
+                denom = (m_mask.sum(dim=0) * x.shape[2]).clamp(min=1.0)       # [B, 1]
+                modal_mean = weighted / denom                                  # [B, H]
+            else:
+                modal_mean = x.mean(dim=(0, 2))                               # [B, H]
+            bottleneck = (modal_mean.unsqueeze(1)
+                          .expand(-1, self.n_bottlenecks, -1)
+                          + self.bottleneck_pe)                                # [B, k, H]
+            bottleneck = bottleneck.contiguous()
+        elif self.use_bottleneck and self.bottleneck is not None:
             bottleneck = self.bottleneck.expand(batch_size, -1, -1).contiguous()
         else:
             bottleneck = None
@@ -907,6 +1004,14 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                  tx_layers: int = 1,
                  tx_dim_ff: int = 128,
                  tx_dropout: float = 0.1,
+                 use_concat_probe_head: bool = False,
+                 bottleneck_init_mode: str = 'random',
+                 fusion_add_pos_embeds: bool = False,
+                 fusion_pos_embeds_max_len: int = 256,
+                 fusion_pos_embed_mode: str = 'full',
+                 fusion_mlp_ratio: float = 1.0,
+                 mlp_ratio: float = 1.0,
+                 share_fusion_params: bool = False,
                  ):
         super().__init__()
 
@@ -1012,6 +1117,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
                 tx_layers=tx_layers,
                 tx_dim_ff=tx_dim_ff,
                 tx_dropout=tx_dropout,
+                use_concat_probe_head=use_concat_probe_head,
             )
         else:
             self.modality_selector = None
@@ -1051,6 +1157,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             sparse_attn_variant=sparse_attn_variant,
             strat_block_size=strat_block_size,
             use_distill=per_modal_distill,
+            mlp_ratio=mlp_ratio,
         )
 
         # ---- Bottleneck fusion (V6Downsample bmm fusion)
@@ -1060,7 +1167,7 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             hidden_size=d_model,
             num_layers=num_layers,
             num_heads=nhead,
-            mlp_dim=int(d_model * 2.0),
+            mlp_dim=int(d_model * fusion_mlp_ratio),
             fusion_layer=fusion_layer,
             use_bottleneck=use_bottleneck,
             n_bottlenecks=n_bottlenecks,
@@ -1076,6 +1183,11 @@ class DualVideoBottleneckModelV6Downsample(nn.Module):
             downsample_min_len=downsample_min_len,
             sparse_attn_variant=sparse_attn_variant,
             strat_block_size=strat_block_size,
+            bottleneck_init_mode=bottleneck_init_mode,
+            add_pos_embeds=fusion_add_pos_embeds,
+            pos_embeds_max_len=fusion_pos_embeds_max_len,
+            pos_embed_mode=fusion_pos_embed_mode,
+            share_fusion_params=share_fusion_params,
         )
 
         # ---- Classifier head

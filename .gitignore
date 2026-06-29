@@ -1,34 +1,41 @@
-# Model checkpoints (4 GB)
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- Large binaries / artifacts (this repo = code + key results/plots only) ----
+*.pth
+*.pt
+*.ckpt
+*.npz
+*.npy
+*.h5
+*.hdf5
+*.pkl
+
+# ---- Logs / runs ----
+logs/
+runs/
+*.log
+*.err
+*.out
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Curated artifacts that ARE tracked ----
+!results/figures/*.png
+!results/tables/*.json
+!results/tables/*.txt
+
+# ---- Pretrained checkpoint bundle (whitelisted, ~78 MB IEMOCAP V6+TierA) ----
 model_chkpt/
-# Allow specific tier-A V6+TierA IEMOCAP checkpoint+Shapley bundle (78 MB)
 !model_chkpt/
 !model_chkpt/IEMOCAP/
 !model_chkpt/IEMOCAP/multimodal_model/
 !model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/
 !model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/**
-
-# Training / eval logs
-logs/
-
-# TensorBoard event files
-runs/
-
-# Python caches
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Large data products
-*.npz
-*.pth
-*.pt
-*.h5
-*.hdf5
-# Re-allow files inside the whitelisted tierA bundle
 !model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/*.npz
 !model_chkpt/IEMOCAP/multimodal_model/2026-05-23_IEMOCAP_v6_iemocap/*.pth
-
-# OS artifacts
-.DS_Store
-Thumbs.db

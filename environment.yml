@@ -1,0 +1,42 @@
+name: maestro
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch=2.5.1
+  - pytorch-cuda=12.1
+  - torchaudio=2.5.1
+  - torchvision=0.20.1
+  - numpy
+  - scipy
+  - scikit-learn
+  - pandas
+  - matplotlib-base
+  - seaborn
+  - h5py
+  - tensorboard
+  - jupyterlab
+  - pyyaml
+  - tqdm
+  - pillow
+  - numba
+  - statsmodels
+  - scanpy
+  - umap-learn
+  - pip
+  - pip:
+      - thop==0.1.1-2209072238
+      - einops==0.8.1
+      - sktime==0.37.0
+      - wandb==0.19.9
+      - biosppy==2.2.3
+      - wfdb==4.3.0
+      - beliefppg==0.3.1
+      - torch-ecg==0.0.31
+      - pyedflib==0.1.40
+      - opencv-python==4.11.0.86
+      - tensorflow==2.19.0
+      - tensorflow-probability==0.22.1

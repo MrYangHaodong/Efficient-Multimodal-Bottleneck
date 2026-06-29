@@ -57,11 +57,22 @@ via ``pad_sequence(batch_first=True)``.
 
 import pickle
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# numpy>=2.0  vs  <2.0 pickle compat: pkl files saved under numpy>=2.0 reference
+# module path ``numpy._core.*`` which is only a partial backport in numpy<2.0
+# (the real submodule live under ``numpy.core``).  Always alias all
+# submodules pickle might resolve so ``pickle.load`` works regardless.
+for _sub in ('numeric', 'multiarray', 'umath', 'numerictypes',
+              '_methods', '_dtype', '_internal'):
+    fq = f'numpy._core.{_sub}'
+    if fq not in sys.modules and hasattr(np.core, _sub):
+        sys.modules[fq] = getattr(np.core, _sub)
 
 import torch
 import torch.nn.functional as F
@@ -73,7 +84,7 @@ from torch.utils.data import Dataset, DataLoader
 # Constants
 # ---------------------------------------------------------------------------
 
-IEMOCAP_ROOT = Path('/home/group/maestro_visual/data/IEMOCAP_full_release')
+IEMOCAP_ROOT = Path('/files1/haodong/data/IEMOCAP')
 
 EMOTION_NAMES: Dict[str, str] = {
     'neu': 'neutral', 'ang': 'angry', 'hap': 'happy', 'sad': 'sad',
@@ -281,6 +292,7 @@ class IEMOCAPDataset(Dataset):
         max_seq_len: int = 0,
         time_compression_ratio: int = 1,
         use_batched_fusion: bool = True,
+        available_sessions: Optional[List[int]] = None,
     ):
         self.data_root              = Path(data_root)
         self.modalities             = modalities if modalities is not None else self.ALL_MODALITIES
@@ -291,7 +303,17 @@ class IEMOCAPDataset(Dataset):
         if csv_path is None:
             csv_path = str(self.data_root / 'train.csv')
 
-        self.df      = pd.read_csv(csv_path)
+        self.df = pd.read_csv(csv_path)
+        # Optional restriction to sessions whose feature archives are
+        # already extracted on disk.  Useful while large session
+        # archives are still transferring / unpacking.
+        if available_sessions is not None:
+            avail = set(int(s) for s in available_sessions)
+            before = len(self.df)
+            self.df = self.df[self.df['session'].isin(avail)].reset_index(drop=True)
+            after = len(self.df)
+            print(f'  Filtered to sessions {sorted(avail)}: '
+                  f'{before} -> {after} samples')
         self.samples = self.df.to_dict('records')
 
     # ------------------------------------------------------------------
@@ -354,6 +376,22 @@ class IEMOCAPDataset(Dataset):
             return feat
         return feat[::self.time_compression_ratio]
 
+    def _resolve_modality_path(self, session, dialog, uid, modality_dir, ext):
+        """Resolve modality feature file path.  Supports two on-disk
+        layouts (auto-detected, flat takes precedence):
+
+          1. Flat:    ``<data_root>/<modality_dir>/<dialog>/<uid>.<ext>``
+          2. Nested:  ``<data_root>/Session{N}/sentences/<modality_dir>/<dialog>/<uid>.<ext>``
+
+        The flat layout is what the released tar.gz archives extract to.
+        Nested is the IEMOCAP_full_release directory tree.
+        """
+        flat = self.data_root / modality_dir / dialog / f'{uid}.{ext}'
+        if flat.exists():
+            return flat
+        return (self.data_root / f'Session{session}' / 'sentences' /
+                modality_dir / dialog / f'{uid}.{ext}')
+
     # ------------------------------------------------------------------
     # Dataset protocol
     # ------------------------------------------------------------------
@@ -376,41 +414,40 @@ class IEMOCAPDataset(Dataset):
         dialog  = row['dialog']
         label   = int(row['emotion_label'])
 
-        sess_dir = self.data_root / f'Session{session}'
         features = []
 
         if 'video' in self.modalities:
-            path = sess_dir / 'sentences' / 'video_features' / dialog / f'{uid}.pkl'
+            path = self._resolve_modality_path(session, dialog, uid, 'video_features', 'pkl')
             feat = self._resample(self._normalize(self._load_pkl_features(path)))
             features.append(torch.FloatTensor(feat))                           # high
             features.append(torch.FloatTensor(self._compress_time(feat)))      # low
 
         if 'audio' in self.modalities:
-            path = sess_dir / 'sentences' / 'audio_features' / dialog / f'{uid}.pkl'
+            path = self._resolve_modality_path(session, dialog, uid, 'audio_features', 'pkl')
             feat = self._resample(self._normalize(self._load_pkl_features(path)))
             features.append(torch.FloatTensor(feat))                           # high
             features.append(torch.FloatTensor(self._compress_time(feat)))      # low
 
         if 'text' in self.modalities:
-            path = sess_dir / 'sentences' / 'text_features' / dialog / f'{uid}.pkl'
+            path = self._resolve_modality_path(session, dialog, uid, 'text_features', 'pkl')
             feat = self._resample(self._normalize(self._load_pkl_features(path)))
             features.append(torch.FloatTensor(feat))                           # high
             features.append(torch.FloatTensor(self._compress_time(feat)))      # low
 
         if 'mocap_hand' in self.modalities:
-            path = sess_dir / 'sentences' / 'MOCAP_hand' / dialog / f'{uid}.txt'
+            path = self._resolve_modality_path(session, dialog, uid, 'MOCAP_hand', 'txt')
             feat = self._resample(self._normalize(_load_mocap(path)))
             features.append(torch.FloatTensor(feat))                           # high
             features.append(torch.FloatTensor(self._compress_time(feat)))      # low
 
         if 'mocap_head' in self.modalities:
-            path = sess_dir / 'sentences' / 'MOCAP_head' / dialog / f'{uid}.txt'
+            path = self._resolve_modality_path(session, dialog, uid, 'MOCAP_head', 'txt')
             feat = self._resample(self._normalize(_load_mocap(path)))
             features.append(torch.FloatTensor(feat))                           # high
             features.append(torch.FloatTensor(self._compress_time(feat)))      # low
 
         if 'mocap_rotated' in self.modalities:
-            path = sess_dir / 'sentences' / 'MOCAP_rotated' / dialog / f'{uid}.txt'
+            path = self._resolve_modality_path(session, dialog, uid, 'MOCAP_rotated', 'txt')
             feat = self._resample(self._normalize(_load_mocap(path)))
             features.append(torch.FloatTensor(feat))                           # high
             features.append(torch.FloatTensor(self._compress_time(feat)))      # low
@@ -478,6 +515,8 @@ def get_dataloader(
     max_seq_len: int = 0,
     time_compression_ratio: int = 1,
     use_batched_fusion: bool = True,
+    available_sessions: Optional[List[int]] = None,
+    split_mode: str = 'random',
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Get train, val, and test DataLoaders for IEMOCAP.
@@ -500,7 +539,10 @@ def get_dataloader(
         modalities = IEMOCAPDataset.ALL_MODALITIES
 
     data_root = Path(data_root)
-    suffix    = '' if split_id == 0 else f'_split{split_id}'
+    if split_mode == 'cross_subject':
+        suffix = f'_cs_split{split_id}'
+    else:
+        suffix = '' if split_id == 0 else f'_split{split_id}'
     train_csv = data_root / f'train{suffix}.csv'
     val_csv   = data_root / f'val{suffix}.csv'
     test_csv  = data_root / f'test{suffix}.csv'
@@ -510,7 +552,7 @@ def get_dataloader(
         print(f'Split CSV not found ({train_csv}). Generating all 3 splits...')
         generate_splits(data_root)
 
-    print(f'\nLoading IEMOCAP (split_id={split_id}) from {data_root}')
+    print(f'\nLoading IEMOCAP (split_id={split_id}, split_mode={split_mode}) from {data_root}')
     print(f'  Modalities : {modalities}')
     print(f'  Feature dims: {FEATURE_DIMS}')
     print(f'  max_seq_len={max_seq_len}  time_compression_ratio={time_compression_ratio}')
@@ -521,6 +563,7 @@ def get_dataloader(
         max_seq_len            = max_seq_len,
         time_compression_ratio = time_compression_ratio,
         use_batched_fusion     = use_batched_fusion,
+        available_sessions     = available_sessions,
     )
 
     train_dataset = IEMOCAPDataset(**dataset_kwargs, csv_path=str(train_csv))

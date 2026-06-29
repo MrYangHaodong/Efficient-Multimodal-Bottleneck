@@ -137,6 +137,7 @@ class ImprovedModalitySelector(nn.Module):
         tx_dim_ff: int = 128,
         tx_dropout: float = 0.1,
         tx_max_seq_len: int = 512,
+        use_concat_probe_head: bool = False,
     ):
         super().__init__()
         self.modalities = modalities
@@ -216,6 +217,22 @@ class ImprovedModalitySelector(nn.Module):
             m: self._ProbeHead(uniform_dim, num_classes)
             for m in modalities
         })
+
+        # Optional unified probe head over the concatenated per-modality
+        # projected features. Provides a single class-prediction signal
+        # whose CE loss back-props through *all* per-modality projectors
+        # and aggregators, instead of M separate per-modality heads. The
+        # per-modality probe_heads above are still kept for backwards
+        # compatibility with confidences used in selector_input.
+        self.use_concat_probe_head = bool(use_concat_probe_head)
+        self.num_classes = int(num_classes)
+        if self.use_concat_probe_head:
+            self.concat_probe_head = nn.Linear(
+                self.num_modalities * uniform_dim, num_classes
+            )
+        else:
+            self.concat_probe_head = None
+        self._concat_probe_logits: Optional[torch.Tensor] = None
 
         # Agreement column was removed (see `_compute_pairwise_agreement`
         # commented out below), so selector_input is just
@@ -363,7 +380,18 @@ class ImprovedModalitySelector(nn.Module):
 
         concat_features = torch.cat(feature_list, dim=1)
         concat_confidence = torch.stack(confidence_list, dim=1)
+        # Expose for external rules (e.g. ensemble of selector signal with
+        # an off-line modality prior): per-modality confidence [B, M].
+        self._concat_confidence = concat_confidence
         selector_input = torch.cat([concat_features, concat_confidence], dim=1)   #FIXME agreement?
+
+        # Single concat-features probe head (optional). Stored for outer
+        # wrappers (e.g. ShapleyDistillWrapper) to consume as a CE
+        # supervisory signal in lieu of the per-modality probe heads.
+        if self.use_concat_probe_head:
+            self._concat_probe_logits = self.concat_probe_head(concat_features)
+        else:
+            self._concat_probe_logits = None
 
         logits = self.selector_mlp(selector_input)
 
@@ -456,7 +484,20 @@ class ImprovedModalitySelector(nn.Module):
                 # outer V6 forward processes all M modalities and routes
                 # the mask into the fusion module.
                 per_sample_scores = available_weights * available_confs   # [B, n_avail]
-                topk_positions = per_sample_scores.topk(k, dim=1).indices  # [B, k]
+                # Gumbel-Top-K (Vieira 2014 / Kool 2019): equivalent to
+                # sampling K items without replacement from softmax(scores/τ).
+                # Only active during training; eval stays deterministic so
+                # test numbers are reproducible.
+                mode = self.exploration_mode if training else 'none'
+                if mode == 'gumbel':
+                    tau = max(self.exploration_temp, 1e-6)
+                    log_scores = (per_sample_scores + 1e-12).log() / tau   # [B, n_avail]
+                    noise = torch.rand_like(log_scores)
+                    gumbel = -torch.log(-torch.log(noise + 1e-9) + 1e-9)
+                    perturbed = log_scores + gumbel
+                    topk_positions = perturbed.topk(k, dim=1).indices       # [B, k]
+                else:
+                    topk_positions = per_sample_scores.topk(k, dim=1).indices  # [B, k]
                 selected_mask = torch.zeros(batch_size, self.num_modalities,
                                              device=device, dtype=torch.bool)
                 avail_idx_tensor = torch.tensor(available_indices, device=device,

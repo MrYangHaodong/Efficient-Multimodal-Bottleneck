@@ -1,0 +1,26 @@
+{
+  "crossattn": {
+    "dsads": {
+      "lib_gflops": 0.209888612,
+      "true_gflops": 0.269888612
+    }
+  },
+  "multimodn": {
+    "dsads": {
+      "lib_gflops": 0.196067584,
+      "true_gflops": 0.256067584
+    }
+  },
+  "decalign": {
+    "dsads": {
+      "lib_gflops": 4.078343552,
+      "true_gflops": 4.378343552
+    }
+  },
+  "shaspec": {
+    "dsads": {
+      "lib_gflops": 0.391808512,
+      "true_gflops": 0.511808512
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "crossattn": {
+    "daliahar": {
+      "lib_gflops": 0.4357089,
+      "true_gflops": 0.68736714
+    },
+    "wesad": {
+      "lib_gflops": 0.878650128,
+      "true_gflops": 1.381966608
+    }
+  },
+  "multimodn": {
+    "daliahar": {
+      "lib_gflops": 0.38242432,
+      "true_gflops": 0.63408256
+    },
+    "wesad": {
+      "lib_gflops": 0.762736768,
+      "true_gflops": 1.266053248
+    }
+  },
+  "decalign": {
+    "daliahar": {
+      "lib_gflops": 8.466580352,
+      "true_gflops": 9.724871552
+    },
+    "wesad": {
+      "lib_gflops": 71.03912384,
+      "true_gflops": 76.07228864
+    }
+  },
+  "shaspec": {
+    "daliahar": {
+      "lib_gflops": 0.51288064,
+      "true_gflops": 0.84842496
+    },
+    "wesad": {
+      "lib_gflops": 1.021571968,
+      "true_gflops": 1.692660608
+    }
+  }
+}

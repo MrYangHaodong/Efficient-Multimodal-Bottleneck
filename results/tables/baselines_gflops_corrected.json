@@ -1,0 +1,74 @@
+{
+  "crossattn": {
+    "daliahar": {
+      "lib_gflops": 0.214172644,
+      "true_gflops": 0.277087204
+    },
+    "pamap2": {
+      "lib_gflops": 0.702031424,
+      "true_gflops": 1.507337792
+    },
+    "wesad": {
+      "lib_gflops": 0.435643152,
+      "true_gflops": 0.561472272
+    },
+    "iemocap": {
+      "lib_gflops": 1.018168464,
+      "true_gflops": 1.169163408
+    }
+  },
+  "multimodn": {
+    "daliahar": {
+      "lib_gflops": 0.191321344,
+      "true_gflops": 0.254235904
+    },
+    "pamap2": {
+      "lib_gflops": 0.65868544,
+      "true_gflops": 1.463991808
+    },
+    "wesad": {
+      "lib_gflops": 0.381579392,
+      "true_gflops": 0.507408512
+    },
+    "iemocap": {
+      "lib_gflops": 1.013849088,
+      "true_gflops": 1.164844032
+    }
+  },
+  "decalign": {
+    "daliahar": {
+      "lib_gflops": 4.149855104,
+      "true_gflops": 4.464427904
+    },
+    "pamap2": {
+      "lib_gflops": 9.055962624,
+      "true_gflops": 12.277188096
+    },
+    "wesad": {
+      "lib_gflops": 35.145843072,
+      "true_gflops": 36.404134272
+    },
+    "iemocap": {
+      "lib_gflops": 29.217227776,
+      "true_gflops": 30.12319744
+    }
+  },
+  "shaspec": {
+    "daliahar": {
+      "lib_gflops": 0.256503808,
+      "true_gflops": 0.340389888
+    },
+    "pamap2": {
+      "lib_gflops": 0.91446016,
+      "true_gflops": 1.988201984
+    },
+    "wesad": {
+      "lib_gflops": 0.510915456,
+      "true_gflops": 0.678687616
+    },
+    "iemocap": {
+      "lib_gflops": 1.422272512,
+      "true_gflops": 1.623599104
+    }
+  }
+}

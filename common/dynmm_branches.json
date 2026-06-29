@@ -1,0 +1,38 @@
+{
+  "_method": "ModalityDynMM branches = seqA experts on nested modality subsets, chosen by val-LOO importance (same ranking method that determined seqA's modality order: full_acc - acc_without_m on val, strong-first). daliahar ranking is stable across folds; wesad LOO is noisy so a cross-fold Borda consensus is used. partial = top-ceil(M/2).",
+  "daliahar": {
+    "1mod":    ["chest_ACC"],
+    "partial": ["chest_ACC", "wrist_ACC", "wrist_BVP"],
+    "full":    ["wrist_ACC", "wrist_BVP", "wrist_EDA", "wrist_TEMP", "chest_ACC"]
+  },
+  "wesad": {
+    "1mod":    ["chest_ECG"],
+    "partial": ["chest_ECG", "chest_RESP", "wrist_ACC", "chest_TEMP", "chest_ACC"],
+    "full":    ["chest_ACC", "chest_ECG", "chest_EMG", "chest_RESP", "chest_EDA", "chest_TEMP", "wrist_ACC", "wrist_BVP", "wrist_EDA", "wrist_TEMP"]
+  },
+  "pamap2": {
+    "1mod":    ["IMU_chest"],
+    "partial": ["IMU_chest", "IMU_hand"],
+    "full":    ["IMU_hand", "IMU_chest", "IMU_ankle", "heart_rate"]
+  },
+  "iemocap": {
+    "1mod":    ["audio"],
+    "partial": ["audio", "text", "mocap_rotated"],
+    "full":    ["video", "audio", "text", "mocap_hand", "mocap_head", "mocap_rotated"]
+  },
+  "dsads": {
+    "1mod":    ["left_arm"],
+    "partial": ["left_arm", "torso", "right_leg"],
+    "full":    ["left_arm", "torso", "right_leg", "left_leg", "right_arm"]
+  },
+  "mosei": {
+    "1mod":    ["text"],
+    "partial": ["text", "vision"],
+    "full":    ["vision", "audio", "text"]
+  },
+  "eav": {
+    "1mod":    ["audio"],
+    "partial": ["audio", "video"],
+    "full":    ["audio", "video", "eeg"]
+  }
+}

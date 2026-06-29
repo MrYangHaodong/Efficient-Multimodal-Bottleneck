@@ -1,0 +1,32 @@
+{
+  "crossattn": {
+    "mosei": {
+      "lib_gflops": 0.182755108,
+      "true_gflops": 0.194275108
+    }
+  },
+  "multimodn": {
+    "mosei": {
+      "lib_gflops": 0.182708736,
+      "true_gflops": 0.194228736
+    }
+  },
+  "decalign": {
+    "mosei": {
+      "lib_gflops": 1.311954944,
+      "true_gflops": 1.346514944
+    }
+  },
+  "shaspec": {
+    "mosei": {
+      "lib_gflops": 0.364662528,
+      "true_gflops": 0.387702528
+    }
+  },
+  "dymo": {
+    "mosei": {
+      "lib_gflops": 0.186901504,
+      "true_gflops": 0.19844608
+    }
+  }
+}

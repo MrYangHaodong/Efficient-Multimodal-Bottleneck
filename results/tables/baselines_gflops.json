@@ -1,0 +1,26 @@
+{
+  "crossattn": {
+    "daliahar": 0.214172644,
+    "pamap2": 0.702031424,
+    "wesad": 0.435643152,
+    "iemocap": 1.018168464
+  },
+  "multimodn": {
+    "daliahar": 0.191321344,
+    "pamap2": 0.65868544,
+    "wesad": 0.381579392,
+    "iemocap": 1.013849088
+  },
+  "decalign": {
+    "daliahar": 4.149855104,
+    "pamap2": 9.055962624,
+    "wesad": 35.145843072,
+    "iemocap": 29.217227776
+  },
+  "shaspec": {
+    "daliahar": 0.256503808,
+    "pamap2": 0.91446016,
+    "wesad": 0.510915456,
+    "iemocap": 1.422272512
+  }
+}

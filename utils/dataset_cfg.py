@@ -436,6 +436,30 @@ class PAMAP2(object):
         self.sequence_length = 512
         self.num_splits = 3
 
+        # ---- Cross-subject (subject-disjoint) protocol --------------------
+        # 9 subjects S101-S109 (raw subject101..109.dat). Per-subject window
+        # counts: 101:949 102:1001 103:660 104:880 105:1037 106:950 107:884
+        # 108:996 109:23. S109 (tiny) always in train. Built by
+        # script/pamap2_crosssubject_preprocess.py -> <cross_subject_dir>/S###.pt
+        self.cross_subject_dir = '/files1/haodong/data/PAMAP2/cross_subject'
+        self.subjects = ['S101', 'S102', 'S103', 'S104', 'S105',
+                         'S106', 'S107', 'S108', 'S109']
+        self.val_set = ['S107', 'S108']          # held out from all folds
+        self.train_set = ['S101', 'S102', 'S103', 'S104', 'S105', 'S106', 'S109']
+        self.eval_set = ['S107', 'S108']
+        # 3-fold CV over {S101..S106} (+ S109 always train); val = S107,S108.
+        self.folds = [
+            {'train_set': ['S103', 'S104', 'S105', 'S106', 'S109'],
+             'eval_set':  ['S101', 'S102']},
+            {'train_set': ['S101', 'S102', 'S105', 'S106', 'S109'],
+             'eval_set':  ['S103', 'S104']},
+            {'train_set': ['S101', 'S102', 'S103', 'S104', 'S109'],
+             'eval_set':  ['S105', 'S106']},
+            # fold3: tests S109 (never an eval subject in folds 0-2) + S101
+            {'train_set': ['S102', 'S103', 'S104', 'S105', 'S106'],
+             'eval_set':  ['S101', 'S109']},
+        ]
+
         self.modality_scenarios = {
 
             ### Strong Modalities
@@ -906,3 +930,57 @@ class DEAP(object):
             'all_peripheral':   ['hEOG', 'vEOG', 'zEMG', 'tEMG', 'GSR', 'Respiration', 'Plethysmograph', 'Temperature'],            # 8/9
             'all':              ['EEG', 'hEOG', 'vEOG', 'zEMG', 'tEMG', 'GSR', 'Respiration', 'Plethysmograph', 'Temperature'],     # 9/9
         }
+
+
+class Emognition(object):
+    """Emognition 2020 dataset (8 modalities, 10 emotion classes).
+
+    Preprocessed npz at /files1/haodong/data/processed_emognition produced by
+    /files1/haodong/data/Emognition/preprocess_emognition.py at 32 Hz with
+    5-sec windows (160 samples) and 50% overlap.
+
+    15 subjects with full 4-device coverage: 49-64 minus 54.
+    10 classes (BASELINE excluded): AMUSEMENT, ANGER, AWE, DISGUST,
+    ENTHUSIASM, FEAR, LIKING, NEUTRAL, SADNESS, SURPRISE.
+    """
+    def __init__(self):
+        super().__init__()
+        self.num_classes = 10
+        self.num_modalities = 8
+        self.modalities = [
+            'eeg_band', 'acc_head', 'bvp', 'eda', 'skt',
+            'acc_wrist', 'hr', 'face_au',
+        ]
+        # All modalities are resampled to 32 Hz at preprocess time.
+        self.sampling_rates = {m: 32 for m in self.modalities}
+        # Channel counts.
+        self.variates = {
+            'eeg_band': 20, 'acc_head': 3, 'bvp': 1, 'eda': 1, 'skt': 1,
+            'acc_wrist': 3, 'hr': 1, 'face_au': 35,
+        }
+        self.min_sample_rate = 32
+        self.max_sample_rate = 32
+        self.base_sample_rate = 32
+        self.duration = 5                                            # seconds per window
+        # 3-fold LOSO over 15 subjects with rotating val (2 subj) +
+        # test (5 subj) + train (8 subj). val_set is per-fold here, NOT
+        # a global fixed set, because 15 subjects is too small to spare
+        # a global hold-out.
+        self.val_set = []                                            # unused — per-fold val
+        self.folds = [
+            {
+                'train_set': [57, 58, 59, 60, 61, 62, 63, 64],
+                'val_set':   [55, 56],
+                'eval_set':  [49, 50, 51, 52, 53],
+            },
+            {
+                'train_set': [49, 50, 51, 52, 53, 62, 63, 64],
+                'val_set':   [60, 61],
+                'eval_set':  [55, 56, 57, 58, 59],
+            },
+            {
+                'train_set': [51, 52, 53, 55, 56, 57, 58, 59],
+                'val_set':   [49, 50],
+                'eval_set':  [60, 61, 62, 63, 64],
+            },
+        ]

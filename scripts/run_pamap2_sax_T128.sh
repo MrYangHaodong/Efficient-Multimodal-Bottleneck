@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# PAMAP2 at T=128 (word_length=4 SAX, genuine downsample, no interpolation) with
+# CLEAN sax, cross-subject, 3 folds, all 5 methods. GPU-PACKED (repeat GPU ids in
+# GPUS to run multiple jobs per GPU -> full memory + util). Results -> results_3p3/pamap2_T128/<method>/.
+set -u
+source /home/egg8711/miniconda3/etc/profile.d/conda.sh; conda activate maestro
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; TRAIN="$HERE/train"
+RES="$HERE/results_3p3/pamap2_T128"; LOG="$RES/logs"; mkdir -p "$LOG"
+# pack: 3 workers each on GPU1/2/3 (free) + 1 on GPU0 (shares with decalign T512) = 10 concurrent
+GPUS="${GPUS:-1 2 3 1 2 3 1 2 3 0}"; read -r -a GPU_ARR <<< "$GPUS"
+read -r -a METHODS <<< "${METHODS_LIST:-seqA crossattn multimodn shaspec decalign}"
+
+main_of() { case "$1" in
+  seqA) echo "main_v6_pamap2_seqfusion_late_fusion.py";;
+  crossattn) echo "main_crossattn_v6_pamap2.py";;
+  multimodn) echo "main_multimodn_pamap2_dyna.py";;
+  shaspec) echo "main_shaspec_pamap2_dyna.py";;
+  decalign) echo "main_decalign_pamap2_dyna.py";;
+esac; }
+extra_of() { case "$1" in
+  seqA) echo "--model_arch=v6 --d_model=64 --nhead=8 --base_factor=10 --batch_size=64 --lr=1e-4 --dropout=0.1 --max_modality_drop=0.4 --use_sparse_attn=False --fusion_mode=sequential --seq_random_order --num_layers_per_modal 3 --num_layers 3 --transform sax --word_length 4";;
+  crossattn) echo "--num_layers_per_modal 3 --num_layers 3 --d_model 64 --sparse_attn_variant orig --transform sax --word_length 4";;
+  multimodn) echo "--num_layers 3 --num_layers_fus 3 --d_model 64 --word_length 4";;
+  shaspec) echo "--d_model 64 --word_length 4";;
+  decalign) echo "--transform sax --batch_size 64 --word_length 4";;
+esac; }
+resdir() { echo "$RES/$1"; }
+fold_done() { compgen -G "$(resdir "$1")"/*/results_fold"$2".json >/dev/null 2>&1; }
+
+echo "== preflight =="; PF=0
+for m in "${METHODS[@]}"; do s="$(main_of "$m")"
+  ( cd "$TRAIN" && CUDA_VISIBLE_DEVICES="" python "$s" --help >/dev/null 2>"$LOG/pf_${m}.err" ) \
+    && echo "  ok $m" || { echo "  FAIL $m (see $LOG/pf_${m}.err)"; PF=1; }
+done
+[ "$PF" -ne 0 ] && { echo "Aborting."; exit 1; }
+
+JOBS=()
+for m in "${METHODS[@]}"; do for f in 0 1 2; do
+  fold_done "$m" "$f" && { echo "[skip] $m f$f"; continue; }
+  JOBS+=("$m|$f"); done; done
+echo "pamap2 sax T128 jobs: ${#JOBS[@]} -> ${JOBS[*]} | workers=${#GPU_ARR[@]}"
+
+run_one() {  # $1=method $2=fold $3=gpu
+  local m="$1" f="$2" g="$3" s ex lg; s="$(main_of "$m")"; ex="$(extra_of "$m")"; lg="$LOG/${m}_f${f}.log"
+  echo "[$(date +%H:%M:%S)] START $m f$f on cuda:$g"
+  ( cd "$TRAIN" && python "$s" $ex --fold "$f" --cuda_pick "cuda:$g" \
+      --num_epochs 100 --results_dir "$(resdir "$m")" --exp_name "${m}_pamap2_sax_T128" ) >> "$lg" 2>&1
+  echo "[$(date +%H:%M:%S)] DONE  $m f$f"
+}
+
+QF="$(mktemp)"; printf '%s\n' "${JOBS[@]}" > "$QF"; QL="${QF}.lock"
+pop() { exec 9>"$QL"; flock 9; local l; l="$(head -1 "$QF")"; tail -n +2 "$QF" > "$QF.tmp" && mv "$QF.tmp" "$QF"; flock -u 9; echo "$l"; }
+for gpu in "${GPU_ARR[@]}"; do
+  ( while :; do job="$(pop)"; [ -z "$job" ] && break
+      IFS='|' read -r m f <<< "$job"; run_one "$m" "$f" "$gpu"; done ) &
+done
+wait; rm -f "$QF" "$QL"
+echo "== PAMAP2 sax T128 ALL DONE $(date) =="

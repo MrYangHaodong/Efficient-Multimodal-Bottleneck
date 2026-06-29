@@ -47,7 +47,7 @@ class HARDataset(Dataset):
         self.duration = cfg.duration
         self.sampling_rates = cfg.sampling_rates
         self.file_paths = []
-        self.sax_params = sax_params or {'alphabet_size': 20, 'word_length': 1}
+        self.sax_params = sax_params or {'alphabet_size': 20, 'word_length': 2}
         self.noise_config = noise_config
 
         for subject in subjects:
