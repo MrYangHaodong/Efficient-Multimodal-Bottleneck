@@ -1,0 +1,17 @@
+{
+  "dataset": "dsads",
+  "fold": 2,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.9692874692874693,
+  "best_test_acc": 0.8541436464088398,
+  "best_test_f1": 0.8495929311828277,
+  "select_test_acc": 0.7834254143646409,
+  "select_test_f1": 0.7706483516107624,
+  "avg_selected": 1.3966850828729283,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

@@ -1,0 +1,43 @@
+{
+  "dataset": "czu_mhad",
+  "fold": 2,
+  "method": "adamml",
+  "best_val_acc": 0.9335664335664335,
+  "best_val_f1": 0.930316737134919,
+  "best_test_acc": 0.7385892116182573,
+  "best_test_f1": 0.7326956305882565,
+  "adamml": {
+    "modalities": [
+      "depth",
+      "skeleton",
+      "sensor_head",
+      "sensor_torso",
+      "sensor_rarm",
+      "sensor_larm",
+      "sensor_leg"
+    ],
+    "test_usage": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "per_mod_gflops": [
+      0.234886656,
+      0.204609024,
+      0.201790976,
+      0.201790976,
+      0.201790976,
+      0.201790976,
+      0.201790976
+    ],
+    "policy_gflops": 0.000183808,
+    "mean_gflops": 0.23507046699523926,
+    "full_gflops": 1.448634368,
+    "gamma": 0.0
+  },
+  "n_test": 7
+}

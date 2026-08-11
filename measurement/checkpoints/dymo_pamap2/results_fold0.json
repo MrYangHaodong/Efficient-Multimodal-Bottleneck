@@ -1,0 +1,17 @@
+{
+  "dataset": "pamap2",
+  "fold": 0,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.7079787234042553,
+  "best_test_acc": 0.6323076923076923,
+  "best_test_f1": 0.6192505597006353,
+  "select_test_acc": 0.4928205128205128,
+  "select_test_f1": 0.4711851888181125,
+  "avg_selected": 1.6282051282051282,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

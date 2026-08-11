@@ -1,0 +1,15 @@
+{
+  "dataset": "eav",
+  "modalities": [
+    "audio",
+    "video",
+    "eeg"
+  ],
+  "num_classes": 5,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.6433333333333333,
+  "best_test_acc": 0.5371428571428571,
+  "best_test_f1": 0.5278683239318631
+}

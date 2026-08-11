@@ -1,0 +1,19 @@
+{
+  "dataset": "czu_mhad",
+  "modalities": [
+    "depth",
+    "skeleton",
+    "sensor_leg",
+    "sensor_head",
+    "sensor_larm",
+    "sensor_rarm",
+    "sensor_torso"
+  ],
+  "num_classes": 22,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.7681818181818182,
+  "best_test_acc": 0.6681818181818182,
+  "best_test_f1": 0.6290040422548054
+}

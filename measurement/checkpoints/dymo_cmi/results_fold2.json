@@ -1,0 +1,17 @@
+{
+  "dataset": "cmi",
+  "fold": 2,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.5648854961832062,
+  "best_test_acc": 0.5469327420546932,
+  "best_test_f1": 0.5562695409486974,
+  "select_test_acc": 0.4198078344419808,
+  "select_test_f1": 0.37535006292408546,
+  "avg_selected": 1.9844789356984478,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

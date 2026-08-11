@@ -1,0 +1,32 @@
+{
+  "dataset": "mmfi",
+  "method": "dynmm_faithful_2branch",
+  "fold": 0,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.8689458689458689,
+  "best_test_f1": 0.8681194895248979,
+  "best_val_acc": 0.9259259259259259,
+  "usage": [
+    0.2735042870044708,
+    0.7264957427978516
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 3.8573055691261824,
+  "per_branch_gflops": [
+    0.989895424,
+    4.936801024
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_d128_fair/dynmm_mmfi/fold0/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

@@ -1,0 +1,17 @@
+{
+  "dataset": "eav",
+  "fold": 2,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.755,
+  "best_test_acc": 0.5914285714285714,
+  "best_test_f1": 0.5862478243432715,
+  "select_test_acc": 0.5757142857142857,
+  "select_test_f1": 0.5624460440650307,
+  "avg_selected": 1.3442857142857143,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

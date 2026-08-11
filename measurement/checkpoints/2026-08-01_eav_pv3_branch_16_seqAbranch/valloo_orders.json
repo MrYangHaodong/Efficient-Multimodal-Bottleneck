@@ -1,0 +1,61 @@
+{
+  "dataset": "eav",
+  "model": "seqA_branched",
+  "run_dir": "2026-08-01_eav_pv3_branch_16_parity_seqAbranch",
+  "folds": [
+    "0",
+    "1",
+    "2"
+  ],
+  "per_fold": {
+    "0": {
+      "order": [
+        "audio",
+        "eeg",
+        "video"
+      ],
+      "loo": {
+        "eeg": 0.016666666666666607,
+        "audio": 0.2733333333333333,
+        "video": 0.0033333333333332993
+      },
+      "val_acc_full": 0.6666666666666666
+    },
+    "1": {
+      "order": [
+        "audio",
+        "video",
+        "eeg"
+      ],
+      "loo": {
+        "eeg": 0.019999999999999907,
+        "audio": 0.3466666666666666,
+        "video": 0.04999999999999993
+      },
+      "val_acc_full": 0.7483333333333333
+    },
+    "2": {
+      "order": [
+        "audio",
+        "eeg",
+        "video"
+      ],
+      "loo": {
+        "eeg": 0.0,
+        "audio": 0.335,
+        "video": -0.008333333333333304
+      },
+      "val_acc_full": 0.7416666666666667
+    }
+  },
+  "static_order": [
+    "audio",
+    "video",
+    "eeg"
+  ],
+  "static_loo_mean": {
+    "eeg": 0.01222222222222217,
+    "audio": 0.3183333333333333,
+    "video": 0.014999999999999977
+  }
+}

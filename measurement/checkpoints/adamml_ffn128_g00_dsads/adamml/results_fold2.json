@@ -1,0 +1,37 @@
+{
+  "dataset": "dsads",
+  "fold": 2,
+  "method": "adamml",
+  "best_val_acc": 0.9772727272727273,
+  "best_val_f1": 0.9767988980931481,
+  "best_test_acc": 0.8585635359116022,
+  "best_test_f1": 0.8566876453536443,
+  "adamml": {
+    "modalities": [
+      "torso",
+      "right_arm",
+      "left_arm",
+      "right_leg",
+      "left_leg"
+    ],
+    "test_usage": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "per_mod_gflops": [
+      0.086660608,
+      0.086660608,
+      0.086660608,
+      0.086660608,
+      0.086660608
+    ],
+    "policy_gflops": 8.1856e-05,
+    "mean_gflops": 0.4333849251270294,
+    "full_gflops": 0.43338489599999996,
+    "gamma": 0.0
+  },
+  "n_test": 5
+}

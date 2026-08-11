@@ -1,0 +1,17 @@
+{
+  "dataset": "mmfi",
+  "modalities": [
+    "depth",
+    "infra1",
+    "mmwave",
+    "lidar",
+    "wifi"
+  ],
+  "num_classes": 27,
+  "fold": 0,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.9259259259259259,
+  "best_test_acc": 0.9145299145299145,
+  "best_test_f1": 0.9129128371273966
+}

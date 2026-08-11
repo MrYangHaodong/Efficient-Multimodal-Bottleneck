@@ -1,0 +1,69 @@
+{
+  "dataset": "utd_mhad",
+  "model": "seqA_branched",
+  "run_dir": "2026-08-09_utd_mhad_pv3_branch_16_seqAbranch",
+  "folds": [
+    "0",
+    "1",
+    "2"
+  ],
+  "per_fold": {
+    "0": {
+      "order": [
+        "inertial",
+        "depth",
+        "rgb",
+        "skeleton"
+      ],
+      "loo": {
+        "skeleton": 0.0,
+        "inertial": 0.13888888888888884,
+        "depth": 0.01851851851851849,
+        "rgb": 0.0092592592592593
+      },
+      "val_acc_full": 0.9259259259259259
+    },
+    "1": {
+      "order": [
+        "inertial",
+        "rgb",
+        "depth",
+        "skeleton"
+      ],
+      "loo": {
+        "skeleton": 0.0,
+        "inertial": 0.2129629629629629,
+        "depth": 0.00925925925925919,
+        "rgb": 0.07407407407407407
+      },
+      "val_acc_full": 0.9444444444444444
+    },
+    "2": {
+      "order": [
+        "inertial",
+        "rgb",
+        "skeleton",
+        "depth"
+      ],
+      "loo": {
+        "skeleton": 0.0,
+        "inertial": 0.10185185185185186,
+        "depth": -0.00925925925925919,
+        "rgb": 0.05555555555555558
+      },
+      "val_acc_full": 0.9074074074074074
+    }
+  },
+  "static_order": [
+    "inertial",
+    "rgb",
+    "depth",
+    "skeleton"
+  ],
+  "static_loo_mean": {
+    "skeleton": 0.0,
+    "inertial": 0.15123456790123455,
+    "depth": 0.00617283950617283,
+    "rgb": 0.046296296296296315
+  }
+}

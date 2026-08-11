@@ -1,0 +1,95 @@
+{
+  "dataset": "dsads",
+  "model": "seqA_branched",
+  "run_dir": "2026-08-01_dsads_pv3_branch_16_parity_seqAbranch",
+  "folds": [
+    "0",
+    "1",
+    "2",
+    "3"
+  ],
+  "per_fold": {
+    "0": {
+      "order": [
+        "torso",
+        "right_arm",
+        "left_arm",
+        "right_leg",
+        "left_leg"
+      ],
+      "loo": {
+        "torso": 0.007985257985257954,
+        "right_arm": 0.006756756756756688,
+        "left_arm": 0.004914004914004844,
+        "right_leg": 0.0030712530712529995,
+        "left_leg": 0.002457002457002422
+      },
+      "val_acc_full": 0.9858722358722358
+    },
+    "1": {
+      "order": [
+        "right_arm",
+        "left_arm",
+        "torso",
+        "left_leg",
+        "right_leg"
+      ],
+      "loo": {
+        "torso": 0.0030712530712531105,
+        "right_arm": 0.004299754299754266,
+        "left_arm": 0.0036855036855036882,
+        "right_leg": 0.0018427518427518441,
+        "left_leg": 0.0030712530712531105
+      },
+      "val_acc_full": 0.9889434889434889
+    },
+    "2": {
+      "order": [
+        "torso",
+        "right_arm",
+        "left_arm",
+        "left_leg",
+        "right_leg"
+      ],
+      "loo": {
+        "torso": 0.00921375921375922,
+        "right_arm": 0.007985257985258065,
+        "left_arm": 0.007985257985258065,
+        "right_leg": 0.004914004914004955,
+        "left_leg": 0.0073710073710073765
+      },
+      "val_acc_full": 0.9901719901719902
+    },
+    "3": {
+      "order": [
+        "right_arm",
+        "right_leg",
+        "torso",
+        "left_arm",
+        "left_leg"
+      ],
+      "loo": {
+        "torso": 0.0036855036855036882,
+        "right_arm": 0.0073710073710073765,
+        "left_arm": 0.0036855036855036882,
+        "right_leg": 0.006756756756756799,
+        "left_leg": 0.0036855036855036882
+      },
+      "val_acc_full": 0.992014742014742
+    }
+  },
+  "static_order": [
+    "right_arm",
+    "torso",
+    "left_arm",
+    "right_leg",
+    "left_leg"
+  ],
+  "static_loo_mean": {
+    "torso": 0.005988943488943493,
+    "right_arm": 0.006603194103194099,
+    "left_arm": 0.005067567567567571,
+    "right_leg": 0.004146191646191649,
+    "left_leg": 0.004146191646191649
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "dataset": "mmfi",
+  "fold": 1,
+  "method": "adamml",
+  "best_val_acc": 1.0,
+  "best_val_f1": 1.0,
+  "best_test_acc": 0.9772079772079773,
+  "best_test_f1": 0.9773090879604289,
+  "adamml": {
+    "modalities": [
+      "infra1",
+      "wifi",
+      "mmwave",
+      "lidar",
+      "depth"
+    ],
+    "test_usage": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "per_mod_gflops": [
+      0.202447616,
+      0.313400064,
+      0.205527808,
+      0.205527808,
+      0.234887936
+    ],
+    "policy_gflops": 0.000381952,
+    "mean_gflops": 0.4377174973487854,
+    "full_gflops": 1.1621731839999998,
+    "gamma": 0.0
+  },
+  "n_test": 5
+}

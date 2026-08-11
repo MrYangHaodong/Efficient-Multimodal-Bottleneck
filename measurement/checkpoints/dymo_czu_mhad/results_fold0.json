@@ -1,0 +1,17 @@
+{
+  "dataset": "czu_mhad",
+  "fold": 0,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.6680497925311203,
+  "best_test_acc": 0.7575757575757576,
+  "best_test_f1": 0.739871556059713,
+  "select_test_acc": 0.696969696969697,
+  "select_test_f1": 0.6752620363072033,
+  "avg_selected": 2.742424242424242,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

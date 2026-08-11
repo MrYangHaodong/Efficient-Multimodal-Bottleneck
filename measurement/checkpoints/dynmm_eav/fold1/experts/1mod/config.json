@@ -1,0 +1,13 @@
+{
+  "dataset": "eav",
+  "modalities": [
+    "audio"
+  ],
+  "num_classes": 5,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.6666666666666666,
+  "best_test_acc": 0.6614285714285715,
+  "best_test_f1": 0.6617722626451568
+}

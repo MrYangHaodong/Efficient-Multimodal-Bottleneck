@@ -1,0 +1,18 @@
+{
+  "dataset": "iemocap",
+  "modalities": [
+    "video",
+    "audio",
+    "text",
+    "mocap_hand",
+    "mocap_head",
+    "mocap_rotated"
+  ],
+  "num_classes": 4,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.6645435244161358,
+  "best_test_acc": 0.6595208070617906,
+  "best_test_f1": 0.6136967440482248
+}

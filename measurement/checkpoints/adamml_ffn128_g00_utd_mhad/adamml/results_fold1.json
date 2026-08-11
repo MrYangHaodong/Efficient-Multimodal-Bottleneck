@@ -1,0 +1,34 @@
+{
+  "dataset": "utd_mhad",
+  "fold": 1,
+  "method": "adamml",
+  "best_val_acc": 0.8888888888888888,
+  "best_val_f1": 0.8806151180420186,
+  "best_test_acc": 0.8703703703703703,
+  "best_test_f1": 0.8585316160479558,
+  "adamml": {
+    "modalities": [
+      "skeleton",
+      "inertial",
+      "depth",
+      "rgb"
+    ],
+    "test_usage": [
+      0.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "per_mod_gflops": [
+      0.203299584,
+      0.201530112,
+      0.234887936,
+      0.234887936
+    ],
+    "policy_gflops": 0.000200448,
+    "mean_gflops": 0.6715064644813538,
+    "full_gflops": 0.874806016,
+    "gamma": 0.0
+  },
+  "n_test": 4
+}

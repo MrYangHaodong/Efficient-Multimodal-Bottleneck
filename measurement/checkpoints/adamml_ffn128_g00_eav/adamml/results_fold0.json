@@ -1,0 +1,31 @@
+{
+  "dataset": "eav",
+  "fold": 0,
+  "method": "adamml",
+  "best_val_acc": 0.6233333333333333,
+  "best_val_f1": 0.6193057902835115,
+  "best_test_acc": 0.6971428571428572,
+  "best_test_f1": 0.690380974985279,
+  "adamml": {
+    "modalities": [
+      "eeg",
+      "audio",
+      "video"
+    ],
+    "test_usage": [
+      0.0,
+      1.0,
+      1.0
+    ],
+    "per_mod_gflops": [
+      0.202310912,
+      0.226493696,
+      0.234882304
+    ],
+    "policy_gflops": 0.000168192,
+    "mean_gflops": 0.4615442156791687,
+    "full_gflops": 0.6638551039999999,
+    "gamma": 0.0
+  },
+  "n_test": 3
+}

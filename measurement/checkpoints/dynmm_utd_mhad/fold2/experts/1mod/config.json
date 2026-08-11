@@ -1,0 +1,13 @@
+{
+  "dataset": "utd_mhad",
+  "modalities": [
+    "inertial"
+  ],
+  "num_classes": 27,
+  "fold": 2,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.5,
+  "best_test_acc": 0.5534883720930233,
+  "best_test_f1": 0.5411734643434584
+}

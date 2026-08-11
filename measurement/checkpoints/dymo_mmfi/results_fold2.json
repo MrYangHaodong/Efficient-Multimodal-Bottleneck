@@ -1,0 +1,17 @@
+{
+  "dataset": "mmfi",
+  "fold": 2,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.6666666666666666,
+  "best_test_acc": 0.6216931216931217,
+  "best_test_f1": 0.6010573466796457,
+  "select_test_acc": 0.5793650793650794,
+  "select_test_f1": 0.5576965016580561,
+  "avg_selected": 2.0714285714285716,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

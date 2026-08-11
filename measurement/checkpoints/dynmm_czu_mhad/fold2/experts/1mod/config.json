@@ -1,0 +1,13 @@
+{
+  "dataset": "czu_mhad",
+  "modalities": [
+    "depth"
+  ],
+  "num_classes": 22,
+  "fold": 2,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.7902097902097902,
+  "best_test_acc": 0.6224066390041494,
+  "best_test_f1": 0.6095391856382633
+}

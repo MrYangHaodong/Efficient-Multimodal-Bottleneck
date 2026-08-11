@@ -1,0 +1,17 @@
+{
+  "dataset": "iemocap",
+  "fold": 1,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.6422505307855626,
+  "best_test_acc": 0.6229508196721312,
+  "best_test_f1": 0.5687269296657151,
+  "select_test_acc": 0.6292559899117276,
+  "select_test_f1": 0.5907327503270992,
+  "avg_selected": 2.1185372005044134,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

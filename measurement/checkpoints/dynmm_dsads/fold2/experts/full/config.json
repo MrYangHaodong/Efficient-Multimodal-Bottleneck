@@ -1,0 +1,17 @@
+{
+  "dataset": "dsads",
+  "modalities": [
+    "left_arm",
+    "torso",
+    "right_leg",
+    "left_leg",
+    "right_arm"
+  ],
+  "num_classes": 19,
+  "fold": 2,
+  "input_mode": "sax",
+  "embed_dim": 128,
+  "best_val_acc": 0.9361179361179361,
+  "best_test_acc": 0.8220994475138121,
+  "best_test_f1": 0.8207820409026362
+}

@@ -89,7 +89,8 @@ class BatchedTransformerBlock(nn.Module):
                  n_bottleneck: int = 0,
                  bottleneck_head: bool = True,
                  sampling_strategy: str = 'global',
-                 strat_block_size: int = 8):
+                 strat_block_size: int = 8,
+                 share_params: bool = False):
         super().__init__()
         assert hidden_size % num_heads == 0, \
             f'hidden_size {hidden_size} not divisible by num_heads {num_heads}'
@@ -97,6 +98,12 @@ class BatchedTransformerBlock(nn.Module):
             f"sampling_strategy must be 'global'|'stratified'|'stratified_block'"
 
         self.M_total = M_total
+        # When share_params=True, all per-modality weights are stored with a
+        # leading dim of 1 and broadcast (expand) to M at forward time, so the
+        # fusion transformer is a single modality-agnostic block shared across
+        # all modalities (vs the default per-modality parameter sets).
+        self.share_params = share_params
+        P = 1 if share_params else M_total
         self.H = hidden_size
         self.nh = num_heads
         self.dh = hidden_size // num_heads
@@ -116,32 +123,32 @@ class BatchedTransformerBlock(nn.Module):
         self.scale = 1.0 / math.sqrt(self.dh)
 
         # ---- Attention: stacked QKV and output projections.
-        self.qkv_w = nn.Parameter(torch.empty(M_total, hidden_size, 3 * hidden_size))
-        self.qkv_b = nn.Parameter(torch.empty(M_total, 3 * hidden_size))
-        self.attn_out_w = nn.Parameter(torch.empty(M_total, hidden_size, hidden_size))
-        self.attn_out_b = nn.Parameter(torch.empty(M_total, hidden_size))
+        self.qkv_w = nn.Parameter(torch.empty(P, hidden_size, 3 * hidden_size))
+        self.qkv_b = nn.Parameter(torch.empty(P, 3 * hidden_size))
+        self.attn_out_w = nn.Parameter(torch.empty(P, hidden_size, hidden_size))
+        self.attn_out_b = nn.Parameter(torch.empty(P, hidden_size))
 
         # ---- LayerNorm (Pre-LN style: applied before each sub-layer)
-        self.ln1_w = nn.Parameter(torch.ones(M_total, hidden_size))
-        self.ln1_b = nn.Parameter(torch.zeros(M_total, hidden_size))
-        self.ln2_w = nn.Parameter(torch.ones(M_total, hidden_size))
-        self.ln2_b = nn.Parameter(torch.zeros(M_total, hidden_size))
+        self.ln1_w = nn.Parameter(torch.ones(P, hidden_size))
+        self.ln1_b = nn.Parameter(torch.zeros(P, hidden_size))
+        self.ln2_w = nn.Parameter(torch.ones(P, hidden_size))
+        self.ln2_b = nn.Parameter(torch.zeros(P, hidden_size))
 
         # ---- MLP
-        self.mlp_w1 = nn.Parameter(torch.empty(M_total, hidden_size, mlp_dim))
-        self.mlp_b1 = nn.Parameter(torch.empty(M_total, mlp_dim))
-        self.mlp_w2 = nn.Parameter(torch.empty(M_total, mlp_dim, hidden_size))
-        self.mlp_b2 = nn.Parameter(torch.empty(M_total, hidden_size))
+        self.mlp_w1 = nn.Parameter(torch.empty(P, hidden_size, mlp_dim))
+        self.mlp_b1 = nn.Parameter(torch.empty(P, mlp_dim))
+        self.mlp_w2 = nn.Parameter(torch.empty(P, mlp_dim, hidden_size))
+        self.mlp_b2 = nn.Parameter(torch.empty(P, hidden_size))
 
         # ---- Optional: dual-path downsample (mirrors seq's _DualPathDownsample).
         # Allocated only when use_distill=True to keep param count clean.
         # Conv kernel=3, stride=2, padding=1 + MaxPool kernel=2, stride=2 + GELU
         # on conv path + element-wise sum + per-modality LayerNorm.
         if use_distill:
-            self.ds_conv_w = nn.Parameter(torch.empty(M_total, hidden_size, hidden_size, 3))
-            self.ds_conv_b = nn.Parameter(torch.empty(M_total, hidden_size))
-            self.ds_norm_w = nn.Parameter(torch.ones(M_total, hidden_size))
-            self.ds_norm_b = nn.Parameter(torch.zeros(M_total, hidden_size))
+            self.ds_conv_w = nn.Parameter(torch.empty(P, hidden_size, hidden_size, 3))
+            self.ds_conv_b = nn.Parameter(torch.empty(P, hidden_size))
+            self.ds_norm_w = nn.Parameter(torch.ones(P, hidden_size))
+            self.ds_norm_b = nn.Parameter(torch.zeros(P, hidden_size))
 
         self.reset_parameters()
 
@@ -175,13 +182,21 @@ class BatchedTransformerBlock(nn.Module):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _gather(p: torch.Tensor, mod_indices: Optional[torch.Tensor]) -> torch.Tensor:
-        """Slice the leading M dim of a stacked param tensor.
+    def _gather(self, p: torch.Tensor, mod_indices: Optional[torch.Tensor]) -> torch.Tensor:
+        """Slice (or broadcast) the leading M dim of a stacked param tensor.
 
-        If `mod_indices is None`, return p unchanged (zero-cost). Otherwise
-        gather along dim 0; gradients flow back to p automatically.
+        Default (share_params=False): if `mod_indices is None`, return p
+        unchanged; otherwise gather along dim 0.
+
+        Shared (share_params=True): p has leading dim 1; expand it to the
+        number of active modalities (M_total if mod_indices is None, else
+        len(mod_indices)). `.contiguous()` so downstream reshape (ds path)
+        works. Gradients accumulate across the expanded copies back into the
+        single stored param — i.e. one shared modality-agnostic block.
         """
+        if self.share_params:
+            n = self.M_total if mod_indices is None else mod_indices.shape[0]
+            return p.expand(n, *p.shape[1:]).contiguous()
         if mod_indices is None:
             return p
         return p.index_select(0, mod_indices)
@@ -480,6 +495,14 @@ class BatchedTransformerBlock(nn.Module):
             x = self._attention(x, qkv_w, qkv_b, attn_out_w, attn_out_b)
         # Match seq's `dropout1` after attention.
         x = F.dropout(x, p=self.dropout_p, training=self.training)
+        # ---- Early-exit instrumentation: per-modality relative attention update.
+        # x here is the attention sublayer output (the update added to residual);
+        # ||update_m|| / ||residual_m|| measures how much cross-modal attention
+        # changed modality m's stream this layer. Small => saturated => exit candidate.
+        if getattr(self, '_capture_attn_delta', False):
+            num = x.norm(dim=(-2, -1))                 # [M, B]  over (L, H)
+            den = residual.norm(dim=(-2, -1)) + 1e-6    # [M, B]
+            self._last_attn_delta = (num / den).detach()  # [M, B]
         x = x + residual
 
         # Optional dual-path downsample (mirror of seq's _DualPathDownsample,

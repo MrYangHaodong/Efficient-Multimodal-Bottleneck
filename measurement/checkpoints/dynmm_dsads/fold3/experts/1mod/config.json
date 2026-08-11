@@ -1,0 +1,13 @@
+{
+  "dataset": "dsads",
+  "modalities": [
+    "left_arm"
+  ],
+  "num_classes": 19,
+  "fold": 3,
+  "input_mode": "sax",
+  "embed_dim": 128,
+  "best_val_acc": 0.7561425061425061,
+  "best_test_acc": 0.5005524861878453,
+  "best_test_f1": 0.49931067920515876
+}

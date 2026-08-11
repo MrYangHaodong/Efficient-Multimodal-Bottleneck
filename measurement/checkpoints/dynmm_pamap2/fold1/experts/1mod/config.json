@@ -1,0 +1,13 @@
+{
+  "dataset": "pamap2",
+  "modalities": [
+    "IMU_chest"
+  ],
+  "num_classes": 12,
+  "fold": 1,
+  "input_mode": "sax",
+  "embed_dim": 128,
+  "best_val_acc": 0.5882978723404255,
+  "best_test_acc": 0.5058441558441559,
+  "best_test_f1": 0.3948214645871269
+}

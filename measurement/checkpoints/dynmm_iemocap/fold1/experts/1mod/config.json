@@ -1,0 +1,13 @@
+{
+  "dataset": "iemocap",
+  "modalities": [
+    "audio"
+  ],
+  "num_classes": 4,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.6422505307855626,
+  "best_test_acc": 0.6872635561160151,
+  "best_test_f1": 0.580724966309579
+}

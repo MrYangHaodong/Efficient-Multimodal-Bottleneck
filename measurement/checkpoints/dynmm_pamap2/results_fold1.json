@@ -1,0 +1,32 @@
+{
+  "dataset": "pamap2",
+  "method": "dynmm_faithful_2branch",
+  "fold": 1,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.5603896103896104,
+  "best_test_f1": 0.4875563131788984,
+  "best_val_acc": 0.7122340425531914,
+  "usage": [
+    0.6038960814476013,
+    0.3961038887500763
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 9.75723764172061,
+  "per_branch_gflops": [
+    4.464872448,
+    17.825926144
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_4ds/dynmm_pamap2/fold1/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

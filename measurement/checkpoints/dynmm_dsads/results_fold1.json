@@ -1,0 +1,32 @@
+{
+  "dataset": "dsads",
+  "method": "dynmm_faithful_2branch",
+  "fold": 1,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.5701657458563536,
+  "best_test_f1": 0.5670389147249684,
+  "best_val_acc": 0.9342751842751843,
+  "usage": [
+    1.0,
+    0.0
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 0.460459776,
+  "per_branch_gflops": [
+    0.460459776,
+    2.302279424
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_4ds/dynmm_dsads/fold1/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

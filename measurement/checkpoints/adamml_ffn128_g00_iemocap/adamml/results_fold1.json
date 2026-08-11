@@ -1,0 +1,40 @@
+{
+  "dataset": "iemocap",
+  "fold": 1,
+  "method": "adamml",
+  "best_val_acc": 0.6093418259023354,
+  "best_val_f1": 0.5912799262294768,
+  "best_test_acc": 0.6582597730138714,
+  "best_test_f1": 0.633359557157513,
+  "adamml": {
+    "modalities": [
+      "video",
+      "audio",
+      "text",
+      "mocap_hand",
+      "mocap_head",
+      "mocap_rotated"
+    ],
+    "test_usage": [
+      1.0,
+      1.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "per_mod_gflops": [
+      0.174900224,
+      0.181453824,
+      0.168346624,
+      0.149146624,
+      0.148839424,
+      0.152909824
+    ],
+    "policy_gflops": 0.00030176,
+    "mean_gflops": 0.5250024795532227,
+    "full_gflops": 0.9758983040000001,
+    "gamma": 0.0
+  },
+  "n_test": 6
+}

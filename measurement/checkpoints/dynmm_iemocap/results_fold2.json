@@ -1,0 +1,32 @@
+{
+  "dataset": "iemocap",
+  "method": "dynmm_faithful_2branch",
+  "fold": 2,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.641,
+  "best_test_f1": 0.6121955050475322,
+  "best_val_acc": 0.7601476014760148,
+  "usage": [
+    0.3630000054836273,
+    0.6370000243186951
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 3.1558701633019717,
+  "per_branch_gflops": [
+    0.771310592,
+    4.514732032
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_d128_fair/dynmm_iemocap/fold2/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

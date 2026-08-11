@@ -1,0 +1,85 @@
+{
+  "dataset": "iemocap",
+  "model": "seqA_branched",
+  "run_dir": "2026-07-19_iemocap_pv3_branch_16_seqAbranch",
+  "folds": [
+    "0",
+    "1",
+    "2"
+  ],
+  "per_fold": {
+    "0": {
+      "order": [
+        "text",
+        "audio",
+        "mocap_hand",
+        "mocap_head",
+        "mocap_rotated",
+        "video"
+      ],
+      "loo": {
+        "video": -0.059268600252206816,
+        "audio": 0.0781841109709962,
+        "text": 0.15006305170239598,
+        "mocap_hand": 0.003783102143757877,
+        "mocap_head": -0.0012610340479192184,
+        "mocap_rotated": -0.015132408575031508
+      },
+      "val_acc_full": 0.6860025220680959
+    },
+    "1": {
+      "order": [
+        "text",
+        "audio",
+        "video",
+        "mocap_rotated",
+        "mocap_head",
+        "mocap_hand"
+      ],
+      "loo": {
+        "video": 0.03821656050955413,
+        "audio": 0.05095541401273884,
+        "text": 0.08811040339702758,
+        "mocap_hand": 0.00849256900212314,
+        "mocap_head": 0.01698513800424628,
+        "mocap_rotated": 0.027600849256900206
+      },
+      "val_acc_full": 0.692144373673036
+    },
+    "2": {
+      "order": [
+        "text",
+        "audio",
+        "mocap_rotated",
+        "mocap_hand",
+        "mocap_head",
+        "video"
+      ],
+      "loo": {
+        "video": -0.01845018450184499,
+        "audio": 0.05535055350553508,
+        "text": 0.2337023370233703,
+        "mocap_hand": 0.0,
+        "mocap_head": -0.0036900369003689537,
+        "mocap_rotated": 0.0036900369003690647
+      },
+      "val_acc_full": 0.7269372693726938
+    }
+  },
+  "static_order": [
+    "text",
+    "audio",
+    "mocap_rotated",
+    "mocap_hand",
+    "mocap_head",
+    "video"
+  ],
+  "static_loo_mean": {
+    "video": -0.013167408081499224,
+    "audio": 0.061496692829756706,
+    "text": 0.15729193070759795,
+    "mocap_hand": 0.004091890381960339,
+    "mocap_head": 0.004011355685319369,
+    "mocap_rotated": 0.005386159194079254
+  }
+}

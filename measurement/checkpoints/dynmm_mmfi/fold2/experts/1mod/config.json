@@ -1,0 +1,13 @@
+{
+  "dataset": "mmfi",
+  "modalities": [
+    "depth"
+  ],
+  "num_classes": 27,
+  "fold": 2,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.6666666666666666,
+  "best_test_acc": 0.5026455026455027,
+  "best_test_f1": 0.48215191942018776
+}

@@ -1,0 +1,32 @@
+{
+  "dataset": "cmi",
+  "method": "dynmm_faithful_2branch",
+  "fold": 2,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.5214338507021434,
+  "best_test_f1": 0.5318226398466039,
+  "best_val_acc": 0.5288985823336968,
+  "usage": [
+    0.024020694196224213,
+    0.9759793281555176
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 6.567135632177838,
+  "per_branch_gflops": [
+    0.956568064,
+    6.705222144
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_d128_fair/dynmm_cmi/fold2/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

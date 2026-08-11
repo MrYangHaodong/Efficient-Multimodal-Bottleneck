@@ -1,0 +1,32 @@
+{
+  "dataset": "eav",
+  "method": "dynmm_faithful_2branch",
+  "fold": 2,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.6771428571428572,
+  "best_test_f1": 0.6776742924209456,
+  "best_val_acc": 0.7416666666666667,
+  "usage": [
+    0.9485714435577393,
+    0.051428571343421936
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 1.0816432023911324,
+  "per_branch_gflops": [
+    0.981501184,
+    2.928706816
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_4ds/dynmm_eav/fold2/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

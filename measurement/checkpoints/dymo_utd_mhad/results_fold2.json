@@ -1,0 +1,17 @@
+{
+  "dataset": "utd_mhad",
+  "fold": 2,
+  "method": "dymo",
+  "model_class": "CrossModalDyMoProto",
+  "best_val_acc": 0.8888888888888888,
+  "best_test_acc": 0.7953488372093023,
+  "best_test_f1": 0.7905120685478443,
+  "select_test_acc": 0.5674418604651162,
+  "select_test_f1": 0.5502983171227971,
+  "avg_selected": 1.5906976744186045,
+  "K": 4,
+  "pt_epoch": 5,
+  "pt_rate": 1.0,
+  "projection_dim": 16,
+  "proto_temperature": 0.1
+}

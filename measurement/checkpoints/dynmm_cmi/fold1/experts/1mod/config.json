@@ -1,0 +1,13 @@
+{
+  "dataset": "cmi",
+  "modalities": [
+    "imu"
+  ],
+  "num_classes": 18,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.4357298474945534,
+  "best_test_acc": 0.41713014460511677,
+  "best_test_f1": 0.42021149873154956
+}

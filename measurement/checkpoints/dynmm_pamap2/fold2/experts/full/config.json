@@ -1,0 +1,16 @@
+{
+  "dataset": "pamap2",
+  "modalities": [
+    "IMU_hand",
+    "IMU_chest",
+    "IMU_ankle",
+    "heart_rate"
+  ],
+  "num_classes": 12,
+  "fold": 2,
+  "input_mode": "sax",
+  "embed_dim": 128,
+  "best_val_acc": 0.5361702127659574,
+  "best_test_acc": 0.6683442375440363,
+  "best_test_f1": 0.670418718576168
+}

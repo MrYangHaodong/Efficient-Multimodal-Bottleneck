@@ -1,0 +1,77 @@
+{
+  "dataset": "mmfi",
+  "model": "seqA_branched",
+  "run_dir": "2026-07-24_mmfi_pv3_branch_16_seqAbranch",
+  "folds": [
+    "0",
+    "1",
+    "2"
+  ],
+  "per_fold": {
+    "0": {
+      "order": [
+        "infra1",
+        "mmwave",
+        "wifi",
+        "lidar",
+        "depth"
+      ],
+      "loo": {
+        "infra1": 0.29100529100529093,
+        "wifi": 0.0,
+        "mmwave": 0.010582010582010581,
+        "lidar": 0.0,
+        "depth": -0.02645502645502651
+      },
+      "val_acc_full": 0.9629629629629629
+    },
+    "1": {
+      "order": [
+        "infra1",
+        "mmwave",
+        "depth",
+        "wifi",
+        "lidar"
+      ],
+      "loo": {
+        "infra1": 0.13756613756613756,
+        "wifi": 0.005291005291005346,
+        "mmwave": 0.010582010582010581,
+        "lidar": 0.0,
+        "depth": 0.010582010582010581
+      },
+      "val_acc_full": 0.9788359788359788
+    },
+    "2": {
+      "order": [
+        "infra1",
+        "depth",
+        "mmwave",
+        "wifi",
+        "lidar"
+      ],
+      "loo": {
+        "infra1": 0.1957671957671958,
+        "wifi": 0.005291005291005346,
+        "mmwave": 0.010582010582010581,
+        "lidar": 0.005291005291005346,
+        "depth": 0.05820105820105825
+      },
+      "val_acc_full": 0.9682539682539683
+    }
+  },
+  "static_order": [
+    "infra1",
+    "depth",
+    "mmwave",
+    "wifi",
+    "lidar"
+  ],
+  "static_loo_mean": {
+    "infra1": 0.20811287477954143,
+    "wifi": 0.0035273368606702307,
+    "mmwave": 0.010582010582010581,
+    "lidar": 0.0017636684303351153,
+    "depth": 0.014109347442680775
+  }
+}

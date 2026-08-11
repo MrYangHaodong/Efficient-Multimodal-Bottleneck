@@ -1,0 +1,32 @@
+{
+  "dataset": "czu_mhad",
+  "method": "dynmm_faithful_2branch",
+  "fold": 2,
+  "branches": [
+    "1mod",
+    "full"
+  ],
+  "resource_mode": "expensive",
+  "best_test_acc": 0.6597510373443983,
+  "best_test_f1": 0.659753405692355,
+  "best_val_acc": 0.8846153846153846,
+  "usage": [
+    0.634854793548584,
+    0.3651452362537384
+  ],
+  "usage_branches": [
+    "1mod",
+    "full"
+  ],
+  "mean_gflops": 3.087133238423019,
+  "per_branch_gflops": [
+    0.989894144,
+    6.733469184
+  ],
+  "reg": 0.1,
+  "hard_gate_training": false,
+  "gate_ckpt": "runs/baselines_d128_fair/dynmm_czu_mhad/fold2/gate.pth",
+  "gate_dim": 16,
+  "nhead": 8,
+  "num_layers": 6
+}

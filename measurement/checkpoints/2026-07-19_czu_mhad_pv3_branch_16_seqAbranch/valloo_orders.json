@@ -1,0 +1,93 @@
+{
+  "dataset": "czu_mhad",
+  "model": "seqA_branched",
+  "run_dir": "2026-07-19_czu_mhad_pv3_branch_16_seqAbranch",
+  "folds": [
+    "0",
+    "1",
+    "2"
+  ],
+  "per_fold": {
+    "0": {
+      "order": [
+        "depth",
+        "skeleton",
+        "sensor_torso",
+        "sensor_larm",
+        "sensor_rarm",
+        "sensor_leg",
+        "sensor_head"
+      ],
+      "loo": {
+        "depth": 0.6970954356846474,
+        "skeleton": 0.045643153526971014,
+        "sensor_head": -0.008298755186721962,
+        "sensor_torso": 0.016597510373444035,
+        "sensor_rarm": -0.004149377593360981,
+        "sensor_larm": 0.004149377593361092,
+        "sensor_leg": -0.004149377593360981
+      },
+      "val_acc_full": 0.8298755186721992
+    },
+    "1": {
+      "order": [
+        "depth",
+        "skeleton",
+        "sensor_rarm",
+        "sensor_leg",
+        "sensor_torso",
+        "sensor_larm",
+        "sensor_head"
+      ],
+      "loo": {
+        "depth": 0.7954545454545454,
+        "skeleton": 0.018181818181818188,
+        "sensor_head": -0.00454545454545463,
+        "sensor_torso": 0.0,
+        "sensor_rarm": 0.004545454545454519,
+        "sensor_larm": 0.0,
+        "sensor_leg": 0.004545454545454519
+      },
+      "val_acc_full": 0.8909090909090909
+    },
+    "2": {
+      "order": [
+        "depth",
+        "skeleton",
+        "sensor_torso",
+        "sensor_rarm",
+        "sensor_leg",
+        "sensor_head",
+        "sensor_larm"
+      ],
+      "loo": {
+        "depth": 0.8286713286713286,
+        "skeleton": 0.045454545454545414,
+        "sensor_head": 0.0,
+        "sensor_torso": 0.0034965034965034336,
+        "sensor_rarm": 0.0034965034965034336,
+        "sensor_larm": 0.0,
+        "sensor_leg": 0.0034965034965034336
+      },
+      "val_acc_full": 0.972027972027972
+    }
+  },
+  "static_order": [
+    "depth",
+    "skeleton",
+    "sensor_torso",
+    "sensor_larm",
+    "sensor_rarm",
+    "sensor_leg",
+    "sensor_head"
+  ],
+  "static_loo_mean": {
+    "depth": 0.7737404366035072,
+    "skeleton": 0.036426505721111536,
+    "sensor_head": -0.004281403244058864,
+    "sensor_torso": 0.006698004623315823,
+    "sensor_rarm": 0.0012975268161989906,
+    "sensor_larm": 0.0013831258644536974,
+    "sensor_leg": 0.0012975268161989906
+  }
+}

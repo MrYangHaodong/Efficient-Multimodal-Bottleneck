@@ -1,0 +1,19 @@
+{
+  "dataset": "cmi",
+  "modalities": [
+    "imu",
+    "tof_2",
+    "tof_3",
+    "tof_1",
+    "thm",
+    "tof_4",
+    "tof_5"
+  ],
+  "num_classes": 18,
+  "fold": 1,
+  "input_mode": "float",
+  "embed_dim": 128,
+  "best_val_acc": 0.5435729847494554,
+  "best_test_acc": 0.5320726733407489,
+  "best_test_f1": 0.531665565941571
+}
