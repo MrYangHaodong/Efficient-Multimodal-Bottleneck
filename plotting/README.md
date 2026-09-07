@@ -10,7 +10,14 @@ itself. No repo imports, no absolute paths, no GPU. Regenerate everything with
 | `plot_cascade.py` | `firstpick_cascade_iemocap.pdf` | `data/firstpick_cascade_iemocap.csv` |
 | `plot_selection_by_class.py` | `selection_by_class_iemocap.pdf` | `data/selection_by_class_iemocap.csv` |
 | `plot_sensitivity.py` | `sensitivity_iemocap.pdf` | `data/sensitivity_iemocap.csv` |
+| `plot_selection_by_class_all.py` | the same quantity on the other six datasets | `data/selection_by_class_<ds>.csv` |
 | `iclr_style.py` | shared style (colours, grid, spines, error bars) | — |
+
+`plot_selection_by_class_all.py` uses two forms, because the panel-per-class layout of the
+IEMOCAP figure does not survive a larger label space. **EAV** (C=5) keeps the bar panels and
+so stays directly comparable with IEMOCAP; **MM-Fi, CMI, CZU-MHAD, DSADS and UTD-MHAD**
+(C=18--27) draw the same quantity as a class x modality heatmap, with a side strip for the
+per-class mean acquired-set size. Only the IEMOCAP figure is used in the paper today.
 
 All three reproduce the figures in the paper **pixel-identically**; that was checked against
 the originals rather than assumed, which is why the cascade CSV stores full float precision
@@ -25,7 +32,8 @@ the modality the policy opened with in the previous one.
 what was taken away to get there. `f1_*` / `mu_mean` / `mean_k` are SPARQ; `ref_*` is the same
 frozen backbone consuming every available modality.
 
-**`selection_by_class_iemocap.csv`** — one row per true class. `freq_<mod>` is
+**`selection_by_class_<ds>.csv`** (7 datasets) — one row per true class. The IEMOCAP file
+carries an extra `class_name` column; the others index classes numerically. `freq_<mod>` is
 P(modality in S | y), `std_<mod>` its standard deviation across folds, `mean_k` the mean
 acquired-set size, `acc` the backbone's accuracy on that class.
 
