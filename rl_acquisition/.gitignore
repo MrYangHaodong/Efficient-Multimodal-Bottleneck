@@ -1,0 +1,29 @@
+# Heavy run artifacts. The module is ~464 KB of code; everything below is ~616 MB of
+# weights, caches and generated output, so it is deliberately kept out of git.
+# Paths matter: environment.py / dqn_policy_qprior.py / run_design.py resolve these
+# relative to their OWN file, so the directories must stay siblings of the .py modules
+# even though they are not tracked. Do not "tidy" them into a subfolder.
+
+# trained Q-networks, one directory per runset (RLB_RUNSET)
+checkpoints/
+checkpoints_*/
+
+# prefix-tree caches, one subdir per RLB_CACHE_SUBDIR (rebuild: rebuild_caches.py <ds>)
+cache/
+
+# generated sweep/point CSVs and plots, one suffixed dir per runset
+results/
+results_*/
+figures/
+figures_*/
+
+# run logs and derived routing dumps
+logs/
+logs_*/
+rl_routing/
+
+# superseded designs kept for provenance only
+archive/
+
+__pycache__/
+*.pyc

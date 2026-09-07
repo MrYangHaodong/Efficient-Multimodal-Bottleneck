@@ -1,0 +1,475 @@
+"""Run ONE design and emit the four artifacts of protocol §12.
+
+    python run_design.py --design dqn_basic --dataset iemocap
+
+  results/<design>_<dataset>_point.csv   headline: one row per (fold, seed, condition)
+  results/<design>_<dataset>_sweep.csv   frontier: + one row per lever value
+  figures/<design>_<dataset>_freq.png    modality-selection frequency (collapse detector)
+  figures/<design>_<dataset>_first.png   first-pick distribution (A0 must be a single bar)
+
+Protocol: fit on VAL, select the lever on val, report on test (§2) — val-fit is not optional. Conditions A0/A20/A40
+(§9). Reward is class-balanced and cost is |A|-normalised (§5) — both live in rl_core, so every
+design inherits them.
+
+--design baselines  runs B1'/B2'/B3'/B_full instead of the RL policy.
+
+Only dqn_qprior remains here; the superseded designs (dqn_basic/noexit/rlv2, cql_setcql*) are
+in archive/ together with their results.
+"""
+import argparse
+import os
+
+import numpy as np
+import pandas as pd
+import torch
+
+import baselines
+import calibration
+import shapley
+import environment as env
+import rl_core as rl
+
+import dqn_policy_qprior as QPR
+import dqn_policy_qprior_noexit as NOEXIT
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ABLATION = 'full'     # 'full' | 'zeroq' | 'randorder' | 'nostop'; set by main() from --ablation
+DTAG = 'dqn_qprior'   # design label written to CSV/fig names + the 'design' column
+
+# Per-dataset advice weight for the FULL-Shapley (marginal) prior, balancing the small marginal
+# advice against conf: W_ADV = conf_median / max(φ)  (measured on the K=16 val cache, fold 0).
+# Only applied when --advice_mode marginal; conditional mode keeps W_ADV=1.
+W_ADV_MAP = {'iemocap': 2.95, 'mmfi': 0.58, 'cmi': 3.87, 'czu_mhad': 0.85,
+             'dsads': 4.89, 'eav': 2.06, 'pamap2': 2.15, 'utd_mhad': 1.73}
+# The parity backbones (RLB_RUNSET=k16p) have a different fusion architecture, hence
+# different conf_median and Shapley scale — W_ADV must be recalibrated on THEIR caches.
+# Filled by calib_w_adv_k16p.py once the parity caches exist; empty = fall back above.
+W_ADV_MAP_K16P = {'dsads': 4.88, 'eav': 2.44, 'pamap2': 2.13, 'utd_mhad': 1.16}
+if os.environ.get('RLB_RUNSET', '').lower() == 'k16p':
+    W_ADV_MAP = {**W_ADV_MAP, **W_ADV_MAP_K16P}
+CONDITIONS = [('A0', 1.0), ('A10', 0.9), ('A20', 0.8), ('A30', 0.7),
+              ('A40', 0.6), ('A50', 0.5), ('A60', 0.4)]   # missing% = 1 - availability
+DELTAS = [-1.5, -1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 1.5]      # post-hoc STOP-Q offset (legacy)
+TAUS = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99]       # conf-exit lever
+LAMBDAS = [0.05, 0.10, 0.20, 0.50, 1.0, 2.0, 3.0]               # cost lever (protocol §13 TODO-C)
+EPS = 0.1                                                          # eps-greedy deploy (§6)
+P_TRAIN = 0.7                                                      # train-time availability (§9)
+DESIGNS = ['dqn_qprior', 'baselines']   # archive/ holds the superseded designs
+
+# Frontier lever for dqn_qprior. 'lambda' (default) is the PRINCIPLED fix (§13 TODO-C):
+# retrain the Q-net at each λ and deploy at δ=0, so every frontier point is a policy that
+# is self-consistent with its own Bellman targets. 'delta' is the legacy post-hoc offset —
+# a Q trained at one λ hacked to pretend it was trained at another (breaks Bellman
+# consistency; at μ=0 the sweep exploits that to become B2'). Set by --lever in main().
+LEVER = 'lambda'
+
+
+def _lever(design):
+    if ABLATION == 'nostop':
+        # no STOP action AND no conf-exit -> ALWAYS acquire every available modality (MU=1).
+        # tau=1.01 > max-softmax makes the conf>=tau exit unreachable, so the walk only ends
+        # when no available modality is left (the full-available set). Single point, no sweep.
+        return ('tau', [1.01])
+    if design == 'dqn_qprior':
+        return ('lambda', LAMBDAS) if LEVER == 'lambda' else ('delta', DELTAS)
+    return ('delta', DELTAS)      # (unused for baselines; kept for signature parity)
+
+
+FORCE_RETRAIN = False   # set by main() from --recompute; read by run_rl
+
+_NETS = {}   # (design, ds, fold, seed, lam, p_train, resample) -> trained net. The net does NOT
+             # depend on the test condition (availability is drawn INSIDE training; av_te is
+             # eval-only), so training once per (fold, seed) rather than per (fold, seed,
+             # condition) is exactly equivalent and 3x cheaper. Without this, qprior took
+             # ~12 min/cell x 27 = 5 h.
+             #
+             # THREE LAYERS, in order: this in-memory dict (session scope) -> the on-disk
+             # checkpoint (cross-session, QPR.train_or_load) -> actually training. The key
+             # includes lam/p_train/resample so different training configs cannot collide --
+             # a lam sweep (protocol §13 TODO-C) needs one net PER lam.
+
+
+def run_rl(design, ds, fold, seed, cond, p, fit, val, test, lat, order, qtabs=None):
+    """-> list of sweep rows for one (fold, seed, condition)."""
+    M, md = fit['M'], env.depth_of(ds)
+    Nf, Nt = fit['softmax'].shape[1], test['softmax'].shape[1]
+    rng_a = np.random.default_rng(1000 + fold)
+    # train-time availability is Bernoulli(P_TRAIN) regardless of the test condition (§9)
+    av_fit = rl.sample_availability(Nf, M, P_TRAIN, np.random.default_rng(500 + fold))
+    av_te = None if p == 1.0 else rl.sample_availability(Nt, M, p, rng_a)
+    nA = float(M if av_te is None else av_te.sum(1).mean())
+    rng_e = np.random.default_rng(2000 + seed)
+
+    if design != 'dqn_qprior':
+        raise ValueError(design)
+
+    # Shapley bootstraps Q via CONDITIONAL advice; the net learns only the residual.
+    # avail is drawn INSIDE train(), fresh every FQI iteration (protocol §9). The net does
+    # NOT depend on the test condition, so it is cached per (fold, seed, lam).
+    av_va = None if p == 1.0 else rl.sample_availability(
+        val['softmax'].shape[1], M, p, np.random.default_rng(3000 + fold))
+    nA_va = float(M if av_va is None else av_va.sum(1).mean())
+
+    def _net_at(lam):
+        k = (design, ds, fold, seed, lam, QPR.P_TRAIN, QPR.RESAMPLE)
+        if k not in _NETS:
+            ck = QPR._ckpt_path(ds, fold, seed, lam, QPR.P_TRAIN, QPR.RESAMPLE)
+            src = 'disk' if (os.path.exists(ck) and not FORCE_RETRAIN) else 'trained-fresh'
+            print(f'  [qprior] {ds} fold{fold} seed{seed} lam{lam:.3f} <- {src}', flush=True)
+            _NETS[k] = QPR.train_or_load(
+                fit, M, md, dataset=ds, fold=fold, seed=seed,
+                lam=lam, p_train=QPR.P_TRAIN, resample=QPR.RESAMPLE,
+                tables=qtabs, force_retrain=FORCE_RETRAIN)
+        return _NETS[k]
+
+    lname, lvals = _lever(design)
+    rows = []
+    for lv in lvals:
+        # ablation 'nostop': reuse the full net (trained at QPR.LAM) and end the episode via
+        # the environment's conf>=tau exit (dqn_policy_qprior_noexit) — the STOP action is gone.
+        if ABLATION == 'nostop':
+            net, tabs = _net_at(QPR.LAM)
+            f1, macq, g, sn, first = NOEXIT.rollout(net, test, M, md, tabs, tau=lv,
+                                                    avail=av_te, eps=EPS, rng=rng_e)
+            vf1, vmacq, _vg, _vsn, _vfp = NOEXIT.rollout(
+                net, val, M, md, tabs, tau=lv, avail=av_va, eps=EPS,
+                rng=np.random.default_rng(4000 + seed))
+        # λ-sweep (§13 TODO-C): retrain at this λ and deploy at δ=0 — a self-consistent policy.
+        # δ-sweep (legacy): one net at the fixed QPR.LAM, post-hoc STOP-Q offset δ=lv.
+        elif lname == 'lambda':
+            net, tabs = _net_at(lv); delta = 0.0
+            f1, macq, g, sn, first = QPR.rollout(net, test, M, md, tabs, delta=delta,
+                                                 avail=av_te, eps=EPS, rng=rng_e)
+            vf1, vmacq, _vg, _vsn, _vfp = QPR.rollout(
+                net, val, M, md, tabs, delta=delta, avail=av_va, eps=EPS,
+                rng=np.random.default_rng(4000 + seed))
+        else:
+            net, tabs = _net_at(QPR.LAM); delta = lv
+            f1, macq, g, sn, first = QPR.rollout(net, test, M, md, tabs, delta=delta,
+                                                 avail=av_te, eps=EPS, rng=rng_e)
+            vf1, vmacq, _vg, _vsn, _vfp = QPR.rollout(
+                net, val, M, md, tabs, delta=delta, avail=av_va, eps=EPS,
+                rng=np.random.default_rng(4000 + seed))
+        r = _row(ds, DTAG, fold, seed, cond, lname, lv, f1, macq, nA, g,
+                 first, sn, test, M, md, av_te)
+        r['macro_f1_val'] = vf1
+        r['ratio_val'] = vmacq / nA_va       # VAL frontier -> B_star (§7); TEST-pick = leakage
+        rows.append(r)
+    return rows
+
+
+def run_baselines(ds, fold, seed, cond, p, fit, val, test, order):
+    M, md = fit['M'], env.depth_of(ds)
+    Nt = test['softmax'].shape[1]
+    av_te = None if p == 1.0 else rl.sample_availability(Nt, M, p, np.random.default_rng(1000 + fold))
+    nA = float(M if av_te is None else av_te.sum(1).mean())
+    Nv = val['softmax'].shape[1]
+    av_va = None if p == 1.0 else rl.sample_availability(Nv, M, p, np.random.default_rng(3000 + fold))
+    nA_va = float(M if av_va is None else av_va.sum(1).mean())
+    rows = []
+    for tau in TAUS:
+        (f1, macq, g), first = baselines.b1_shapley_restricted(test, M, md, order, tau, av_te)
+        r = _row(ds, 'B1_shapley', fold, seed, cond, 'tau', tau, f1, macq, nA, g,
+                 first, None, test, M, md, av_te)
+        (vf1, vm, _), _ = baselines.b1_shapley_restricted(val, M, md, order, tau, av_va)
+        r['macro_f1_val'], r['ratio_val'] = vf1, vm / nA_va      # VAL frontier -> B_star (§7)
+        rows.append(r)
+        (f1, macq, g), first = baselines.b3_random_order(test, M, md, tau, av_te, seed)
+        r = _row(ds, 'B3_random', fold, seed, cond, 'tau', tau, f1, macq, nA, g,
+                 first, None, test, M, md, av_te)
+        (vf1, vm, _), _ = baselines.b3_random_order(val, M, md, tau, av_va, seed)
+        r['macro_f1_val'], r['ratio_val'] = vf1, vm / nA_va
+        rows.append(r)
+    f1, macq, g = baselines.b2_all_available(test, M, md, order, av_te)
+    r = _row(ds, 'B2_all_available', fold, seed, cond, 'tau', 2.0, f1, macq, nA, g,
+             np.full(Nt, -1), None, test, M, md, av_te)
+    vf1, vm, _ = baselines.b2_all_available(val, M, md, order, av_va)
+    r['macro_f1_val'], r['ratio_val'] = vf1, vm / nA_va          # single point; B_star trivial
+    rows.append(r)
+    # B_full = ALL M modalities. Only PHYSICALLY REACHABLE when nothing is missing, so emit it
+    # for A0 only. Under A20/A40 the "consume everything you have" reference is B2' (all-available)
+    # — reporting B_full there implies an F1 the sample could not attain (protocol §11).
+    if cond == 'A0':
+        f1, g = baselines.b_full(ds, fold, 'test', fit['valloo_order'])
+        r = _row(ds, 'B_full', fold, seed, cond, 'tau', 2.0, f1, float(M), float(M), g,
+                 np.full(Nt, -1), None, test, M, md, None)
+        vf1, _vg = baselines.b_full(ds, fold, 'val', fit['valloo_order'])
+        r['macro_f1_val'], r['ratio_val'] = vf1, 1.0
+        rows.append(r)
+    return rows
+
+
+def _row(ds, design, fold, seed, cond, lname, lv, f1, macq, nA, g, first, sn, test, M, md, av):
+    """One result row. NOTE on the first-pick diagnostics under eps-greedy deploy:
+
+    `n_first_distinct` is NOT a useful collapse metric when eps > 0 — eps-greedy sprays eps of
+    the samples uniformly over the legal set, so a policy with ONE greedy first action still
+    shows M distinct picks. Use `first_mode_frac` against `first_eps_ceiling`:
+
+        eps-greedy over a single greedy action  =>  mode = (1-eps) + eps/M
+
+    Measured on iemocap A0: mode 0.922 vs ceiling 0.917 -> the greedy pick IS single, exactly
+    as protocol §8.8 requires. A mode well BELOW the ceiling at A0 means the root state is
+    leaking per-sample information (a real bug).
+    """
+    has = (first >= 0)
+    cnt = np.bincount(first[has], minlength=M) if has.any() else np.zeros(M)
+    mode = float(cnt.max() / max(has.sum(), 1))
+    ceil = (1.0 - EPS) + EPS / M
+    r = {'dataset': ds, 'design': design, 'fold': fold, 'seed': seed, 'condition': cond,
+         'lever_name': lname, 'lever_value': lv, 'macro_f1': f1,
+         'mean_acquired': macq, 'mean_available': nA, 'ratio': macq / nA, 'mean_gflops': g,
+         'collapse_takeall': bool(abs(macq - nA) < 1e-6),
+         'n_first_distinct': int(len(set(first[has]))) if has.any() else 0,
+         'first_mode_frac': mode, 'first_eps_ceiling': ceil,
+         # a single greedy first action, up to eps-greedy noise
+         'first_is_single': bool(has.any() and mode >= ceil - 0.03)}
+    # per-modality selection frequency (for freq.png) + first-pick counts (for first.png)
+    if sn is not None:
+        _, used, _ = rl.node_meta(test['nodes'], M, md)
+        N = len(sn)
+        for m in range(M):
+            r[f'freq_{m}'] = float(np.mean([m in used[s] for s in sn]))
+    for m in range(M):
+        r[f'first_{m}'] = int((first == m).sum())
+    return r
+
+
+def plots(df, design, ds, mods, outdir):
+    import matplotlib; matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    M = len(mods)
+    best = df[df.is_bstar] if 'is_bstar' in df and df.is_bstar.any() else df
+    # ── freq.png: modality-selection frequency per condition ──
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+    for ax, (cond, _p) in zip(axes, CONDITIONS):
+        d = best[best.condition == cond]
+        if not len(d):
+            continue
+        cols = [f'freq_{m}' for m in range(M) if f'freq_{m}' in d]
+        if not cols:
+            ax.set_title(f'{cond} (n/a)'); continue
+        mu = [d[c].mean() for c in cols]; sd = [d[c].std() for c in cols]
+        ax.bar(range(len(cols)), mu, yerr=sd, capsize=3, color='#2a78d6')
+        ax.set_xticks(range(len(cols))); ax.set_xticklabels(mods[:len(cols)], rotation=40, ha='right')
+        ax.set_title(cond); ax.set_ylim(0, 1); ax.grid(axis='y', ls='--', alpha=.4)
+    axes[0].set_ylabel('fraction of samples that acquired it')
+    fig.suptitle(f'{design} / {ds} — selection frequency (flat at ~1 or tracking p = collapse)')
+    plt.tight_layout(); plt.savefig(f'{outdir}/{design}_{ds}_freq.png', dpi=140); plt.close(fig)
+    # ── first.png: first-pick distribution per condition ──
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+    for ax, (cond, _p) in zip(axes, CONDITIONS):
+        d = best[best.condition == cond]
+        cols = [f'first_{m}' for m in range(M)]
+        if not len(d):
+            continue
+        tot = np.array([d[c].sum() for c in cols], float)
+        tot = tot / max(tot.sum(), 1)
+        ax.bar(range(M), tot, color='#1baf7a')
+        ax.set_xticks(range(M)); ax.set_xticklabels(mods, rotation=40, ha='right')
+        mode = d.first_mode_frac.mean(); ceil = d.first_eps_ceiling.mean()
+        ax.axhline(ceil, color='#c2185b', ls='--', lw=1,
+                   label=f'eps-greedy ceiling {ceil:.2f}')
+        ax.set_title(f'{cond}  mode={mode:.2f}'); ax.set_ylim(0, 1)
+        ax.grid(axis='y', ls='--', alpha=.4); ax.legend(fontsize=7)
+    axes[0].set_ylabel('fraction of samples')
+    fig.suptitle(f'{design} / {ds} — first pick. At A0 the mode MUST sit at the eps-greedy '
+                 f'ceiling (one greedy action, protocol §8.8); below it = root state leaking')
+    plt.tight_layout(); plt.savefig(f'{outdir}/{design}_{ds}_first.png', dpi=140); plt.close(fig)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--design', required=True, choices=DESIGNS)
+    ap.add_argument('--dataset', default='iemocap')
+    ap.add_argument('--folds', default='0,1,2')
+    ap.add_argument('--seeds', default='0,1,2')
+    # FIT SPLIT IS VAL, NOT CONFIGURABLE (protocol §2). The backbone memorises its train split
+    # (IEMOCAP video: 0.9989 train / 0.3124 test), so the train cache's predictions carry no
+    # transferable signal — a policy fit there learns "take video, you're done" and video is at
+    # chance on test. Measured: train-fit TEST F1 0.40-0.48 vs val-fit ~0.60.
+    ap.add_argument('--mu', type=float, default=0.20)
+    ap.add_argument('--lever', choices=['lambda', 'delta'], default='lambda',
+                    help="dqn_qprior frontier lever: 'lambda' (§13 TODO-C, principled — retrain "
+                         "per λ at δ=0) or 'delta' (legacy post-hoc STOP-Q offset).")
+    ap.add_argument('--ablation', choices=['full', 'zeroq', 'randorder', 'nostop'], default='full',
+                    help="Q-prior/exit ablation of dqn_qprior: 'zeroq' (no prior), 'randorder' "
+                         "(random-order prior), 'nostop' (no STOP action -> conf>=tau exit). "
+                         "Writes results/<design>_<ablation>_<ds>_*.csv.")
+    ap.add_argument('--advice_mode', choices=['conditional', 'marginal'], default='conditional',
+                    help="Q-prior advice source: 'conditional' (gains given held set, natural stop) "
+                         "or 'marginal' (FULL Shapley via posterior, per-dataset W_ADV balancing). "
+                         "marginal -> results/<design>_fullshap[...]_<ds>_*.csv.")
+    ap.add_argument('--w_adv', type=float, default=None,
+                    help="override the per-dataset W_ADV (marginal mode only); tags output "
+                         "_wa<X> so a weight sweep does not clobber the default-weight run.")
+    ap.add_argument('--w_cost', type=float, default=1.0, help='cost weight W_COST (marginal mode).')
+    ap.add_argument('--recompute', action='store_true',
+                    help='ignore on-disk checkpoints; retrain from scratch and overwrite')
+    ap.add_argument('--lambdas', default=None,
+                    help='comma-separated lambda sweep overriding the default grid, e.g. '
+                         '"1.2,1.4,1.6,1.8" for a fine-grained pass between the coarse points. '
+                         'Each value trains its own net (self-consistent frontier point).')
+    ap.add_argument('--exact_dp', action='store_true',
+                    help="replace the Fitted-Q bootstrap with EXACT backward induction over the "
+                         "complete prefix tree (Q* in closed form on the fit split). Removes "
+                         "bootstrapping error rather than damping it. Tags output _dp.")
+    ap.add_argument('--dp_reward', choices=['correct','expected'], default='correct',
+                    help="terminal reward inside the exact DP. 'correct' = realized "
+                         "(clairvoyant, optimum pinned at depth~1 for every lambda); "
+                         "'expected' = E[reward|posterior], measurable from the state and "
+                         "restores lambda as a monotone lever. Use with --calibrate.")
+    ap.add_argument('--stop_bce', type=float, default=0.0,
+                    help="decision-aware auxiliary loss weight: BCE on the stop-vs-acquire "
+                         "margin against the exact-DP optimal stop label (requires --exact_dp). "
+                         "Tags output _sb<w>.")
+    ap.add_argument('--force_first', action='store_true',
+                    help="fix the FIRST acquisition to the highest-Shapley available modality "
+                         "(protocol §8.8: the A0 root state is identical for all samples, so the "
+                         "first pick is a non-decision the FQI residual can get wrong). Binds in "
+                         "training AND at test via the action mask. Tags output _ff.")
+    ap.add_argument('--boundary_w', type=float, default=0.0,
+                    help='boundary-weighted FQI loss strength K (0 = off). Pair weight '
+                         '1+K·exp(−gap/med), gap = |Q[STOP]−best Q[acquire]|. Tags _bw<K>.')
+    ap.add_argument('--res_l2', type=float, default=0.0,
+                    help='L2 shrinkage of the residual toward the Shapley prior (0 = off). '
+                         'Fights FQI drift (half the nets peak at iteration 0-1). Tags _rl2<b>.')
+    ap.add_argument('--calibrate', action='store_true',
+                    help='per-depth temperature scaling of the cache softmax, fitted on VAL, '
+                         'applied to fit/val/test. Monotone per row -> argmax/F1 at a fixed '
+                         'acquisition set unchanged; only conf/entropy/margin (the stop policy) '
+                         'move. Tags output _calib; checkpoints get their own _calib tag.')
+    a = ap.parse_args()
+    global FORCE_RETRAIN, LEVER, ABLATION, DTAG, LAMBDAS
+    if a.lambdas:
+        LAMBDAS = [float(x) for x in a.lambdas.split(',') if x.strip()]
+    FORCE_RETRAIN = a.recompute
+    LEVER = a.lever
+    ABLATION = a.ablation
+    # 'nostop' reuses the FULL net (only the rollout/exit changes); the prior ablations retrain.
+    QPR.ABLATION = 'full' if a.ablation == 'nostop' else a.ablation
+    # FULL-Shapley (marginal) advice + per-dataset advice weight (balances the small marginal advice).
+    QPR.ADVICE_MODE = a.advice_mode
+    if a.advice_mode == 'marginal':
+        QPR.W_ADV = a.w_adv if a.w_adv is not None else W_ADV_MAP.get(a.dataset, 1.0)
+        QPR.W_COST = a.w_cost
+    else:
+        QPR.W_ADV = 1.0
+    _sfx_shap = '_fullshap' if a.advice_mode == 'marginal' else ''
+    _sfx_wa = f'_wa{a.w_adv:g}' if (a.advice_mode == 'marginal' and a.w_adv is not None) else ''
+    _sfx_wc = f'_wc{a.w_cost:g}' if (a.advice_mode == 'marginal' and a.w_cost != 1.0) else ''
+    _sfx_cal = '_calib' if a.calibrate else ''
+    _sfx_ff = '_ff' if a.force_first else ''
+    _sfx_dp = '_dp' if a.exact_dp else ''
+    QPR.EXACT_DP = a.exact_dp
+    QPR.STOP_BCE = a.stop_bce
+    QPR.DP_REWARD = a.dp_reward
+    _sfx_rw = f'_r{a.dp_reward[:3]}' if (a.exact_dp and a.dp_reward!='correct') else ''
+    _sfx_lf = '_lamfine' if a.lambdas else ''
+    _sfx_sb = f'_sb{a.stop_bce:g}' if a.stop_bce > 0 else ''
+    _sfx_rew = (('_cw' if os.environ.get('RLB_CONF_WEIGHTED') == '1' else '')
+                + ('_eff' if os.environ.get('RLB_CW_EFF') == '1' else ''))
+    QPR.CKPT_SUFFIX = _sfx_cal + _sfx_ff + _sfx_rew
+    QPR.BW_K = a.boundary_w
+    QPR.RES_L2 = a.res_l2
+    _sfx_bw = f'_bw{a.boundary_w:g}' if a.boundary_w > 0 else ''
+    _sfx_rl2 = f'_rl2{a.res_l2:g}' if a.res_l2 > 0 else ''
+    DTAG = (a.design + _sfx_shap + _sfx_wa + _sfx_wc + _sfx_cal + _sfx_ff + _sfx_dp + _sfx_rw + _sfx_sb + _sfx_lf + _sfx_bw + _sfx_rl2
+            + ('' if a.ablation == 'full' else f'_{a.ablation}')
+            + ('_cw' if os.environ.get('RLB_CONF_WEIGHTED') == '1' else '')
+            + ('_eff' if os.environ.get('RLB_CW_EFF') == '1' else ''))
+    folds = [int(x) for x in a.folds.split(',')]
+    seeds = [int(x) for x in a.seeds.split(',')]
+    ds = a.dataset
+    _runset = os.environ.get('RLB_RUNSET', '')
+    _sfx = f'_{_runset}' if _runset else ''
+    _resdir = f'{HERE}/results{_sfx}'; _figdir = f'{HERE}/figures{_sfx}'
+    os.makedirs(_resdir, exist_ok=True); os.makedirs(_figdir, exist_ok=True)
+
+    sweep_p = f'{_resdir}/{DTAG}_{ds}_sweep.csv'
+    point_p = f'{_resdir}/{DTAG}_{ds}_point.csv'
+    # INCREMENTAL: append each cell's rows the moment it finishes, so a long run is watchable
+    # (and survives a crash) instead of only writing after every cell completes.
+    if os.path.exists(sweep_p):
+        os.replace(sweep_p, sweep_p + '.prev')
+    wrote_header = False
+
+    rows = []
+    for fold in folds:
+        fit = env.get_cache('val', ds, fold)        # val-fit, always (§2)
+        val = env.get_cache('val', ds, fold)
+        test = env.get_cache('test', ds, fold)
+        M, md = fit['M'], env.depth_of(ds)
+        if a.calibrate:
+            # T fitted on VAL only (labels already used at design time for Shapley); applied
+            # to all three caches so conf/entropy/margin — the stop policy's inputs — are
+            # calibrated everywhere, while argmax/F1 at a fixed set stays identical.
+            Ts = calibration.fit_temperature(val)
+            for c in (fit, val, test):
+                calibration.apply_temperature(c, Ts)
+            print(f'  [calib] {ds} fold{fold} T per depth: '
+                  + ', '.join(f'd{k}={v:.2f}' for k, v in sorted(Ts.items())), flush=True)
+        order = baselines.shapley_order_from(fit, M, md)
+        # forced first pick uses THIS fold's Shapley order (fit split), so no test leakage
+        rl.FORCE_FIRST_ORDER = order if a.force_first else None
+        # conditional Shapley tables: computed ONCE per fold on the fit split (val), reused
+        # across seeds/conditions. Labels are used here only, at design time.
+        if a.design != 'dqn_qprior':
+            qtabs = None
+        elif a.advice_mode == 'marginal':
+            # FULL Shapley: per-class MARGINAL Shapley table -> node_advice via posterior.
+            Cc = fit['softmax'].shape[-1]
+            qtabs = shapley.value_val_perclass(
+                shapley.shapley_per_sample(fit, M, md), fit['y'], M, Cc)
+        else:
+            qtabs = shapley.conditional_tables(fit, M, md)
+        lat = None
+        for cond, p in CONDITIONS:
+            for seed in (seeds if a.design != 'baselines' else [0]):
+                n_before = len(rows)
+                if a.design == 'baselines':
+                    rows += run_baselines(ds, fold, seed, cond, p, fit, val, test, order)
+                else:
+                    rows += run_rl(a.design, ds, fold, seed, cond, p, fit, val, test, lat,
+                                   order, qtabs)
+                new = rows[len(rows) - n_new:] if (n_new := len(rows) - n_before) else []
+                if new:
+                    df_new = pd.DataFrame(new)
+                    df_new.to_csv(sweep_p, mode='a', header=not wrote_header, index=False)
+                    wrote_header = True
+                    best = df_new.loc[(df_new.macro_f1 - a.mu * df_new.ratio).idxmax()]
+                    print(f'  {a.design} {ds} fold{fold} seed{seed} {cond} done  '
+                          f'| B_star: F1={best.macro_f1:.4f} util={best.ratio:.2f} '
+                          f'GFLOP={best.mean_gflops:.3f} 1st_mode={best.first_mode_frac:.2f}',
+                          flush=True)
+                else:
+                    print(f'  {a.design} {ds} fold{fold} seed{seed} {cond} done (no rows)', flush=True)
+
+    df = pd.DataFrame(rows)
+    # B_star: the ratio B1' would choose on its own frontier (§7). Marked, not enforced here —
+    # the matched-budget read happens in the report, off sweep.csv.
+    # B_star per (DESIGN, fold, condition) — NOT per (fold, condition). The baselines file holds
+    # B1'/B2'/B3'/B_full together; grouping without `design` keeps ONE row across all four and
+    # silently drops the rest.
+    # B_star: chosen on VAL (§7). Choosing it on TEST would let each design take the best of
+    # ~9 levers AFTER seeing the test score -- selection on the test set, which inflates the
+    # noisier designs most. The lever is frozen from val; the reported cell is its TEST row.
+    df['is_bstar'] = False
+    sel = 'macro_f1_val' if 'macro_f1_val' in df else 'macro_f1'
+    rat = 'ratio_val' if 'ratio_val' in df else 'ratio'
+    if sel == 'macro_f1':
+        print('WARNING: no val frontier in these rows -> B_star falls back to TEST selection.')
+    for (des, fold, cond), g in df.groupby(['design', 'fold', 'condition']):
+        sc = g[sel] - a.mu * g[rat]
+        df.loc[sc.idxmax(), 'is_bstar'] = True
+
+    df.to_csv(sweep_p, index=False)      # rewrite cleanly with is_bstar resolved
+    df[df.is_bstar].to_csv(point_p, index=False)
+    plots(df, DTAG, ds, env.get_cache('val', ds, folds[0])['mods'], _figdir)
+    print(f'\nwrote {sweep_p}  ({len(df)} rows)')
+    print(f'wrote {point_p}  ({int(df.is_bstar.sum())} rows)')
+    print(f'wrote {_figdir}/{DTAG}_{ds}_{{freq,first}}.png')
+
+
+if __name__ == '__main__':
+    main()

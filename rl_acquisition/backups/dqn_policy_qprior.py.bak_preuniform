@@ -1,0 +1,586 @@
+"""
+dqn_policy_qprior — bootstrap the Q-values from Shapley, learn only the RESIDUAL.
+=================================================================================
+Shapley as a PRIOR ON Q, not as a state feature.
+
+    Q(s,a) = Q_prior(s,a) + f_theta(s,a),      f_theta initialised to 0
+
+    Q_prior(s, STOP)      = conf(s)                        the model's own P(correct) estimate
+    Q_prior(s, acquire m) = conf(s) + advice(s,m) - lam/|A|   value now + expected gain - cost
+
+    advice(s,m) = softmax[node] @ tabs[S_node]   CONDITIONAL: the [C,M] table is selected by the
+    node's acquired set, so the value of m is the gain GIVEN what you already hold.
+
+    Marginal Shapley would say "acquire" forever -- it averages over coalitions WITHOUT text, so
+    audio keeps +0.179 even at the node where you already have text. Conditional collapses it to
+    +0.059, and by {text,audio} everything is negative (mocap_rot -0.013, video -0.060). With
+    cost lam/|A| = 0.031 the prior then correctly stops after text+audio -- no lam retuning.
+
+WHY. Putting Shapley in the STATE (dqn_policy_rlv2) asks the network to *learn* the ranking from
+~635 val samples, and it does not: when `text` is unavailable it reaches for `video` — the
+memorising modality, at chance on test — and loses 0.20 F1 on exactly those rows
+(F1 text-absent: B1 0.5024 vs dqn_basic 0.3020 vs dqn_rlv2 0.2895).
+
+Here the prior is STRUCTURAL. At init f_theta = 0, so the policy IS Shapley-greedy with a
+cost-aware stop — it cannot pick video, because advice(video) is low. FQI then learns only the
+correction, so a failure to learn degrades to the PRIOR rather than to noise. That is the
+opposite failure mode from a plain Q-net, and strictly stronger than set-CQL's soft anchor
+(a penalty pulling Q toward val-LOO) because the prior is built into the function, not the loss.
+
+  reward : class-balanced 1[correct] x 1/freq(y)  at STOP        (rl_core.correctness)
+  cost   : lam / |A| per acquire                                 (rl_core.step_cost)
+  state  : [mask | available | softmax | H | margin | depth/M | |A|/M]   (rl_core.build_state)
+  stop   : argmax Q == STOP; `delta` sweeps the frontier at eval time
+
+EXIT = ACTION. STOP is action index M; the net LEARNS when to stop, and `delta` (a post-hoc offset
+on Q[STOP]) is the deploy frontier lever. The sibling `dqn_policy_qprior_noexit` shares this exact
+training but makes EXIT = STATE (the environment stops at conf >= tau; tau is the lever). Both load
+the SAME checkpoint -- the ordering is identical; only the exit mechanism differs.
+
+Run:  python dqn_policy_qprior.py
+"""
+import os
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+import environment as env
+import rl_core as rl
+import shapley
+
+_RUNSET = os.environ.get('RLB_RUNSET', '')
+CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'checkpoints' + (f'_{_RUNSET}' if _RUNSET else ''))
+
+# ── ABLATION of the Q-prior (all else identical). Set via RLB_ABLATION or run_design --ablation.
+#   'full'      : conditional-Shapley prior  (the paper's policy)
+#   'zeroq'     : NO prior at all -> Q_prior == 0 -> plain zero-initialised Q-network learnt from
+#                 scratch by FQI (isolates the value of bootstrapping Q from Shapley).
+#   'randorder' : prior pushes a FIXED RANDOM acquisition order (constant +gain on the next
+#                 unacquired modality in a random permutation) instead of Shapley's value order
+#                 -> isolates the value of the ORDER vs an arbitrary one.
+# ('nostop' — remove the STOP action — is NOT a prior change: it reuses the 'full' net and swaps
+#  the rollout for dqn_policy_qprior_noexit's conf>=tau environment exit. Wired in run_design.)
+ABLATION = os.environ.get('RLB_ABLATION', 'full')
+_RANDORDER_SEED = int(os.environ.get('RLB_RANDORDER_SEED', '12345'))
+
+# ── Advice source for the Q-prior ────────────────────────────────────────────
+#   'conditional' (default) : gain d(S,m)=v(S+m)-v(S) GIVEN the held set — goes negative for a
+#                             redundant modality, so the prior has a built-in STOP.
+#   'marginal'   (FULL Shapley): node_advice = softmax @ vv, vv = per-class MARGINAL Shapley.
+#                             Redundancy-blind (advice ≈ ≥0 always) — the STOP must come from the
+#                             learned residual / cost. Set via RLB_ADVICE_MODE or --advice_mode.
+ADVICE_MODE = os.environ.get('RLB_ADVICE_MODE', 'conditional')
+
+# ── Per-component weights on the Q-prior ─────────────────────────────────────
+#   Q[acquire m] = W_CONF·conf + W_ADV·advice(m) − W_COST·(λ/|A|)
+#   Q[STOP]      = W_CONF·conf
+# W_CONF cancels in the acquire-vs-stop decision (common term) but sets the Bellman value scale.
+# W_ADV is set PER DATASET by run_design to balance advice against conf (= conf_med/max(φ)), so the
+# small marginal-Shapley advice is not swamped. W_COST scales the λ frontier lever.
+W_CONF = float(os.environ.get('RLB_W_CONF', '1.0'))
+W_ADV  = float(os.environ.get('RLB_W_ADV',  '1.0'))
+W_COST = float(os.environ.get('RLB_W_COST', '1.0'))
+
+# Extra training-config tag appended to checkpoint names (e.g. '_calib' when run_design
+# temperature-scales the cache softmax) — the training DATA changes, so the net must not
+# collide with the uncalibrated one on disk.
+CKPT_SUFFIX = '_cw' if os.environ.get('RLB_CONF_WEIGHTED') == '1' else ''
+
+# ── Training-process levers (0 = off, the historical behaviour) ──────────────
+# BW_K: boundary-weighted FQI loss. Pair weight = 1 + BW_K·exp(−gap/median(gap)), where
+#   gap = |Q[STOP] − max_m Q[acquire m]| under the current online Q. Pairs near the
+#   stop/acquire boundary — the only place the policy can actually flip — get up to
+#   (1+BW_K)× the regression weight; pairs with a settled decision fade toward 1×.
+# RES_L2: shrinkage of the residual toward ZERO, i.e. toward the Shapley prior. Half the
+#   trained nets peak at FQI iteration 0-1 (the Bellman bootstrap drifts off the prior and
+#   holdout selection rescues it); this fights the drift at the source instead.
+# EXACT_DP: replace the Fitted-Q bootstrap with exact backward induction over the
+# complete prefix tree (see _exact_q). Targets become the true Q*, so no target network
+# and no iteration-to-iteration error accumulation.
+EXACT_DP = os.environ.get('RLB_EXACT_DP', '0') not in ('0', '', 'false', 'False')
+BW_K   = float(os.environ.get('RLB_BW_K',   '0.0'))
+RES_L2 = float(os.environ.get('RLB_RES_L2', '0.0'))
+# STOP_BCE: decision-aware auxiliary loss. Squared error fits VALUES, but only the sign of
+# (Q[STOP] - max_m Q[acquire m]) is deployed, and a large value error far from that boundary
+# is harmless while a small one at the boundary flips the action. With exact-DP targets the
+# optimal stop/continue label is known per (node, sample), so the stop rule can be trained
+# directly as calibrated binary classification with a proper scoring rule (BCE) on that margin.
+# DP_REWARD: terminal reward used INSIDE the exact DP.
+#   'correct'  1[correct]*w_y  — the realized, CLAIRVOYANT reward. Its optimum sits at
+#              depth ~1 for EVERY lambda (measured), because knowing the label lets the DP
+#              stop both on already-correct AND on hopeless samples. A policy that only
+#              sees the posterior cannot tell those apart, so imitating it collapses to
+#              "always stop" and lambda loses all grip on the operating point.
+#   'expected' E[reward | posterior] = sum_c p_c * w_c — the conditional expectation of the
+#              same reward given the OBSERVABLE state. Same objective in expectation, but
+#              measurable w.r.t. what the policy can actually see, so the target is
+#              attainable. Pair with --calibrate: the expectation is only correct if the
+#              posterior is calibrated, and it is the calibrated version that restores a
+#              monotone lambda -> depth curve (measured: pamap2 2.30 -> 1.00 over the sweep).
+DP_REWARD = os.environ.get('RLB_DP_REWARD', 'correct')
+STOP_BCE  = float(os.environ.get('RLB_STOP_BCE',  '0.0'))
+STOP_TEMP = float(os.environ.get('RLB_STOP_TEMP', '0.1'))   # logit scale for the margin
+
+# Bump when a checkpoint's MEANING changes (architecture, Bellman target, reward, state layout).
+# A stale checkpoint is REJECTED with a hard error, never silently used -- a silently-loaded stale
+# net produces wrong numbers that pass every downstream sanity check.
+CHECKPOINT_FORMAT_VERSION = 1
+
+LAM = 0.05           # FIXED, not a lever. Price of consuming ALL available modalities.
+                     # The lam-sweep (protocol TODO-C) proved lam does not trace a usable frontier:
+                     # F1 flat and util floored at ~0.55 across lam 0.05..0.30. So lam is pinned at a
+                     # small cost-awareness value (0.05 = the high-F1 end; barely touches the order),
+                     # and the DEPLOY frontier lever is `delta` here (exit-as-ACTION) / `tau` in the
+                     # sibling dqn_policy_qprior_noexit (exit-as-STATE).
+GAMMA = 1.0
+SEED = 0
+P_TRAIN = 0.7        # training-time availability rate (protocol §9)
+RESAMPLE = True      # redraw availability EVERY FQI iteration -- see train()
+CHUNK = 1_000_000    # rows per forward pass. MAX_DEPTH=M makes the tree huge:
+                     #   iemocap 1,957 nodes x 635 =  1.2M rows -> hidden 0.64 GB   (fine)
+                     #   cmi    13,700 nodes x 734 = 10.1M rows -> hidden 5.15 GB   (+backward -> OOM)
+                     # One 10M-row forward asked for 8.98 GiB and died. Chunking keeps it flat.
+
+
+def randorder_advice(cache, M, md, avail=None, perm=None):
+    """ABLATION prior: advise acquiring in a FIXED RANDOM order (not Shapley's value order).
+
+    Each sample gets a constant positive gain on its EARLIEST-in-`perm` unacquired+available
+    modality, so the greedy prior walks `perm`. Same [n,N,M] shape + availability masking as
+    conditional_advice, so it drops into q_prior unchanged. `perm` is deterministic from
+    RLB_RANDORDER_SEED for reproducibility."""
+    nodes = cache['nodes']; soft = cache['softmax']; n, N, C = soft.shape
+    used = [frozenset() if k == '' else frozenset(int(x) for x in k.split(',')) for k in nodes]
+    if perm is None:
+        perm = list(np.random.default_rng(_RANDORDER_SEED).permutation(M))
+    GAIN = np.float32(0.10)                               # ~scale of a strong conditional gain
+    av = np.ones((N, M), bool) if avail is None else np.asarray(avail, bool)
+    adv = np.zeros((n, N, M), np.float32)
+    for i in range(n):
+        held = used[i]
+        assigned = np.zeros(N, bool)
+        for m in perm:                                   # random order among the unheld
+            if m in held:
+                continue
+            take = av[:, m] & (~assigned)                # each sample's earliest available in perm
+            adv[i, take, m] = GAIN
+            assigned |= take
+    return adv
+
+
+def q_prior(cache, M, md, vv, lam, avail=None):
+    """[n, N, A] one-step-lookahead Q prior. No learning. ABLATION-aware (see top of file)."""
+    soft = cache['softmax']; n, N, C = soft.shape
+    A = M + 1
+    if ABLATION == 'zeroq':
+        return np.zeros((n, N, A), np.float32)            # plain zero-init Q, no prior at all
+    conf = soft.max(-1)                                   # [n, N]
+    if ABLATION == 'randorder':
+        adv = randorder_advice(cache, M, md, avail)       # [n,N,M] fixed random-order gain
+    elif ADVICE_MODE == 'marginal':
+        adv = shapley.node_advice(cache, M, md, vv, avail)         # FULL/marginal Shapley via posterior
+    else:
+        adv = shapley.conditional_advice(cache, M, md, vv, avail)  # gain GIVEN the held set
+    sc = rl.step_cost(lam, avail, N, M)                   # [N]
+    Q = np.zeros((n, N, A), np.float32)
+    Q[:, :, M] = W_CONF * conf                            # STOP: (weighted) value of stopping now
+    Q[:, :, :M] = W_CONF * conf[:, :, None] + W_ADV * adv - W_COST * sc[None, :, None]  # acquire
+    return Q
+
+
+class ResidualQ(nn.Module):
+    """f_theta with a ZERO-initialised output layer, so Q = Q_prior exactly at step 0."""
+
+    def __init__(self, Fdim, A, h=64):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(Fdim, h), nn.ReLU(),
+                                 nn.Linear(h, h), nn.ReLU(), nn.Linear(h, A))
+        nn.init.zeros_(self.net[-1].weight); nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+@torch.no_grad()
+def _fwd(net, S, chunk=CHUNK):
+    """Chunked forward. Same result as net(S), constant memory."""
+    if S.shape[0] <= chunk:
+        return net(S)
+    return torch.cat([net(S[i:i + chunk]) for i in range(0, S.shape[0], chunk)])
+
+
+def _fit_epoch(net, opt, S, T, mask, denom, chunk=CHUNK, stop_aux=None):
+    """One masked-MSE epoch with gradient ACCUMULATION over chunks -> identical gradient to the
+    single-shot version, but peak memory is O(chunk) instead of O(rows).
+
+    stop_aux (optional, requires exact-DP targets): (QPflat, mkflat, ystop, wrow) adds the
+    STOP_BCE decision loss on the margin Q[STOP] - max_legal Q[acquire]."""
+    opt.zero_grad()
+    tot = 0.0
+    for i in range(0, S.shape[0], chunk):
+        j = min(i + chunk, S.shape[0])
+        pred = net(S[i:j])
+        loss = (((pred - T[i:j]) ** 2) * mask[i:j]).sum() / denom
+        if RES_L2 > 0:
+            loss = loss + RES_L2 * ((pred ** 2) * mask[i:j]).sum() / denom
+        if stop_aux is not None and STOP_BCE > 0:
+            QPf, mkf, ystop, wrow = stop_aux
+            M_ = pred.shape[-1] - 1
+            qfull = pred + QPf[i:j]
+            qa = torch.where(mkf[i:j, :M_], qfull[:, :M_],
+                             torch.full_like(qfull[:, :M_], -1e9)).amax(-1)
+            z = (qfull[:, M_] - qa) / max(STOP_TEMP, 1e-6)
+            w = wrow[i:j]
+            if w.sum() > 0:
+                bce = torch.nn.functional.binary_cross_entropy_with_logits(
+                    z, ystop[i:j], weight=w, reduction='sum') / w.sum().clamp_min(1)
+                loss = loss + STOP_BCE * bce
+        loss.backward()
+        tot += float(loss.detach())
+    opt.step()
+    return tot
+
+
+@torch.no_grad()
+def _exact_q(Rst, child, legal, step, mk, depth, M, md, dev):
+    """EXACT optimal Q by backward induction over the prefix tree — no bootstrapping.
+
+    The cached tree is the COMPLETE ordered prefix tree (verified: node count equals
+    sum_k M!/(M-k)!), and the fit split's labels are known, so on the fit split the MDP is
+    fully specified: transitions are the tree edges, the STOP reward is the node's
+    class-balanced correctness, and acquiring costs lam/|A|. That makes Q* computable in
+    closed form instead of approximated by Fitted-Q:
+
+        Q*(s, STOP)      = R(s)
+        Q*(s, acquire m) = -cost + GAMMA * V*(child_m(s))
+        V*(s)            = max over LEGAL a of Q*(s, a)
+
+    Nodes are processed deepest-first, so every child's V* is final before its parent is
+    touched. Illegal actions are excluded from the max (availability is baked into `mk`),
+    so V* is the value of the best action the sample can actually take.
+
+    Replacing the FQI target with this removes bootstrapping error entirely — the reason
+    RES_L2 (shrinking the residual back toward the prior) helped in the first place.
+
+    Returns Q [n, Ntr, A].
+    """
+    n, Ntr = Rst.shape
+    A = M + 1
+    V = torch.zeros((n, Ntr), device=dev)
+    Q = torch.zeros((n, Ntr, A), device=dev)
+    NEG = -1e9
+    for d in range(md, -1, -1):
+        idx = torch.nonzero(torch.as_tensor(depth == d, device=dev), as_tuple=True)[0]
+        if idx.numel() == 0:
+            continue
+        Qi = torch.empty((idx.numel(), Ntr, A), device=dev)
+        Qi[:, :, M] = Rst[idx]                                   # STOP: terminal reward
+        for m in range(M):
+            c = child[idx, m]
+            ok = legal[idx, m].unsqueeze(-1)
+            Qi[:, :, m] = torch.where(ok, -step + GAMMA * V[c.clamp_min(0)],
+                                      torch.full((idx.numel(), Ntr), NEG, device=dev))
+        V[idx] = torch.where(mk[idx], Qi, torch.full_like(Qi, NEG)).amax(-1)
+        Q[idx] = Qi
+    return Q
+
+
+def _tensors(cache, M, md, avail, vv, lam, tr, dev):
+    """Everything that depends on the availability draw. Rebuilt when we resample."""
+    depth, used, ch = rl.node_meta(cache['nodes'], M, md)
+    n = len(cache['nodes']); N = cache['softmax'].shape[1]; A = M + 1
+    Sf = rl.build_state(cache, M, md, avail)
+    Qp = q_prior(cache, M, md, vv, lam, avail)
+    mk = rl.action_mask_avail(n, M, depth, ch, avail, N)
+    reach = rl.reachable_nodes(used, avail, n, N, M)
+    sc = rl.step_cost(lam, avail, N, M)
+    S = torch.tensor(Sf[:, tr, :]).reshape(n * len(tr), -1).to(dev)
+    QP = torch.tensor(Qp[:, tr, :]).to(dev)
+    mk_t = torch.tensor(mk[:, tr, :]).to(dev)
+    step = torch.tensor(sc[tr]).to(dev)[None, :]
+    trainable = (mk_t & torch.tensor(reach[:, tr]).to(dev).unsqueeze(-1)).float()
+    return Sf, Qp, S, QP, QP.reshape(n * len(tr), A), mk_t, step, trainable.reshape(n * len(tr), A)
+
+
+def _ckpt_path(dataset, fold, seed, lam, p_train, resample):
+    """One file per unique TRAINING config. Every knob that changes the weights is in the name,
+    so different lam values coexist instead of clobbering each other."""
+    tag = f"lam{lam:.3f}_p{p_train:.2f}_r{int(bool(resample))}"
+    if ADVICE_MODE != 'conditional':
+        tag += f"_{ADVICE_MODE}_wa{W_ADV:.2f}"             # marginal-Shapley nets kept separate
+    if ABLATION != 'full':
+        tag += f"_{ABLATION}"                              # ablation nets never clobber the full net
+    if EXACT_DP:
+        tag += "_dp"                                       # exact-DP targets retrain
+    if EXACT_DP and DP_REWARD != 'correct':
+        tag += f"_r{DP_REWARD[:3]}"
+    if STOP_BCE > 0:
+        tag += f"_sb{STOP_BCE:g}"                                       # exact-DP targets retrain
+    if BW_K > 0:
+        tag += f"_bw{BW_K:g}"                              # boundary-weighted loss retrains
+    if RES_L2 > 0:
+        tag += f"_rl2{RES_L2:g}"                           # residual-shrinkage retrains
+    if CKPT_SUFFIX:
+        tag += CKPT_SUFFIX                                 # e.g. '_calib': different training data
+    return os.path.join(CHECKPOINT_DIR, dataset,
+                        f"qprior_fold{fold}_seed{seed}_{tag}.pt")
+
+
+def _ckpt_meta(dataset, fold, seed, lam, p_train, resample, fdim, extra=None):
+    """Everything a load must verify. Any mismatch on these fields raises."""
+    m = {
+        'format_version': CHECKPOINT_FORMAT_VERSION,
+        'dataset':  dataset,
+        'fold':     int(fold),
+        'seed':     int(seed),
+        'lam':      float(lam),
+        'p_train':  float(p_train),
+        'resample': bool(resample),
+        'iters':    int(rl.ITERS),
+        'epochs':   int(rl.EPOCHS),
+        'lr':       float(rl.LR),
+        'balanced': bool(rl.BALANCED),
+        'fdim':     int(fdim),
+    }
+    if ABLATION != 'full':
+        m['ablation'] = ABLATION                          # forces a retrain if ablation changes
+    if ADVICE_MODE != 'conditional':
+        m['advice_mode'] = ADVICE_MODE
+        m['w_adv'] = float(W_ADV); m['w_cost'] = float(W_COST); m['w_conf'] = float(W_CONF)
+    if extra:
+        m.update(extra)
+    return m
+
+
+def _default_vv(cache, M, md):
+    """Advice source when run_design passes none: marginal per-class Shapley for ADVICE_MODE=
+    'marginal' (node_advice), else the conditional gain tables (conditional_advice)."""
+    if ADVICE_MODE == 'marginal':
+        C = cache['softmax'].shape[-1]
+        return shapley.value_val_perclass(shapley.shapley_per_sample(cache, M, md), cache['y'], M, C)
+    return shapley.conditional_tables(cache, M, md)
+
+
+def train(cache, M, md, avail=None, seed=SEED, lam=LAM, tables=None,
+          resample=RESAMPLE, p_train=P_TRAIN):
+    """resample=True: redraw availability EVERY FQI iteration (protocol §9 says "per episode").
+
+    Why it matters: with ONE draw per sample, each sample is only ever seen under a single
+    availability mask -> 793 (sample, availability) pairs, reused for all 8 iterations, and the
+    text-absent rows are a fixed subset of ~175 that the net can memorise. Resampling gives
+    793 x ITERS pairs and shows the SAME sample both with and without text -- which is exactly
+    the contrast needed to learn "text gone -> take audio, not video".
+    """
+    torch.manual_seed(seed); np.random.seed(seed)
+    rng_av = np.random.default_rng(7000 + seed)
+    dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    depth, used, ch = rl.node_meta(cache['nodes'], M, md)
+    n = len(cache['nodes']); N = cache['softmax'].shape[1]; A = M + 1
+
+    tr, ho = rl.inner_split(N)
+    # CONDITIONAL tables: {S: [C,M]} of v(S+m)-v(S). Labels used HERE only, on the fit split.
+    vv = tables if tables is not None else _default_vv(cache, M, md)
+    if avail is None:
+        avail = rl.sample_availability(N, M, p_train, rng_av)
+    R = rl.correctness(cache)
+    if EXACT_DP and DP_REWARD == 'expected':
+        # E[balanced correctness | posterior]: sum_c p_c * w_c, with the SAME per-class
+        # weights rl.correctness uses, so the two rewards agree in expectation.
+        _y = cache['y']; _C = cache['softmax'].shape[-1]
+        _freq = np.bincount(_y, minlength=_C).astype(np.float64) / len(_y)
+        _w = 1.0 / np.maximum(_freq, 1e-8)
+        _w = _w / (_w[_y].mean())            # match correctness()'s E[w]=1 normalisation
+        R = (cache['softmax'] * _w[None, None, :]).sum(-1).astype(np.float32) \
+            if rl.BALANCED else cache['softmax'].max(-1).astype(np.float32)
+    child_of = rl.child_table(ch, n, M)
+
+    Sf, Qp, S, QP, QPflat, mk_t, step, tflat = _tensors(cache, M, md, avail, vv, lam, tr, dev)
+    Rst = torch.tensor(R[:, tr]).to(dev)
+    child = torch.tensor(child_of).to(dev); legal = child >= 0
+    Fdim = Sf.shape[-1]
+
+    online = ResidualQ(Fdim, A).to(dev); target = ResidualQ(Fdim, A).to(dev)
+    target.load_state_dict(online.state_dict())
+    opt = torch.optim.Adam(online.parameters(), lr=rl.LR)
+    ho_cache = {'nodes': cache['nodes'], 'softmax': cache['softmax'][:, ho, :],
+                'y': cache['y'][ho], 'gflops': cache['gflops']}
+    av_ho = avail[ho]
+    Sf_ho, Qp_ho = Sf[:, ho, :], Qp[:, ho, :]     # holdout is scored under a FIXED draw
+    best = {'f1': -1, 'state': None, 'it': -1}
+    seen = set()
+
+    denom = tflat.sum().clamp_min(1)
+    for it in range(rl.ITERS):
+        if resample and it > 0:                    # <-- new availability draw each iteration
+            avail = rl.sample_availability(N, M, p_train, rng_av)
+            Sf, Qp, S, QP, QPflat, mk_t, step, tflat = _tensors(cache, M, md, avail, vv, lam, tr, dev)
+            denom = tflat.sum().clamp_min(1)
+        seen.update(tuple(r) for r in avail[tr])
+        with torch.no_grad():
+            if EXACT_DP:
+                # exact Q* for THIS availability draw; recomputed per draw, never bootstrapped
+                T = _exact_q(Rst, child, legal, step, mk_t, depth, M, md, dev)
+                qo_m = torch.where(mk_t, T, torch.full_like(T, -1e9))   # for BW_K only
+            else:
+                qo = _fwd(online, S).reshape(n, len(tr), A) + QP    # full Q = residual + prior
+                qt = _fwd(target, S).reshape(n, len(tr), A) + QP
+                qo_m = torch.where(mk_t, qo, torch.full_like(qo, -1e9))
+                a_star = qo_m.argmax(-1)
+                V = torch.gather(qt, -1, a_star.unsqueeze(-1)).squeeze(-1)
+                T = torch.zeros((n, len(tr), A), device=dev)
+                T[:, :, M] = Rst
+                for m in range(M):
+                    c = child[:, m].clamp_min(0)
+                    tgt = -step + GAMMA * V[c]
+                    T[:, :, m] = torch.where(legal[:, m:m + 1], tgt, torch.zeros_like(tgt))
+        # regress the RESIDUAL onto (Bellman target - prior)
+        Tres = (T.reshape(n * len(tr), A) - QPflat)
+        if BW_K > 0:
+            # boundary weight per (node, sample): closest stop-vs-acquire calls count most
+            qa = qo_m[:, :, :M].max(-1).values
+            gap = (qo_m[:, :, M] - qa).abs()
+            fin = gap < 1e8                              # leaves have no legal acquire
+            med = gap[fin].median().clamp_min(1e-6)
+            w = torch.where(fin, 1.0 + BW_K * torch.exp(-gap / med), torch.ones_like(gap))
+            wflat = (tflat.reshape(n, len(tr), A) * w.unsqueeze(-1)).reshape(n * len(tr), A)
+            denom_w = wflat.sum().clamp_min(1)
+        else:
+            wflat, denom_w = tflat, denom
+        stop_aux = None
+        if EXACT_DP and STOP_BCE > 0:
+            with torch.no_grad():
+                Tm = torch.where(mk_t, T, torch.full_like(T, -1e9))
+                qa_t = Tm[:, :, :M].amax(-1)                    # best acquire under Q*
+                has_acq = qa_t > -1e8                           # False at leaves / no options
+                ys = (T[:, :, M] >= qa_t).float()               # DP says STOP is optimal
+                reach_row = (wflat.reshape(n, len(tr), A).sum(-1) > 0)
+                wrow = (has_acq & reach_row).float()
+                stop_aux = (QPflat, mk_t.reshape(n * len(tr), A),
+                            ys.reshape(-1), wrow.reshape(-1))
+        for _ in range(rl.EPOCHS):
+            _fit_epoch(online, opt, S, Tres, wflat, denom_w, stop_aux=stop_aux)
+        target.load_state_dict(online.state_dict())
+        f1, _, _, _, _ = _rollout(online, ho_cache, M, md, Sf_ho, Qp_ho, 0.0, av_ho)
+        if f1 > best['f1']:
+            best = {'f1': f1, 'it': it,
+                    'state': {k: v.cpu().clone() for k, v in online.state_dict().items()}}
+    net = ResidualQ(Fdim, A); net.load_state_dict(best['state']); net.to(dev).eval()
+    net._n_patterns = len(seen); net._best_it = best['it']
+    return net, vv
+
+
+def train_or_load(cache, M, md, dataset, fold, avail=None, seed=SEED, lam=LAM,
+                  tables=None, resample=RESAMPLE, p_train=P_TRAIN,
+                  force_retrain=False, fit_split='val'):
+    """Persistent train(). Returns (net, vv) -- same shape, behaviourally identical to a fresh
+    train under the same config.
+
+    The net is a pure function of (val cache, dataset, fold, seed, lam, p_train, resample): it
+    does NOT depend on the test condition (availability is drawn INSIDE train) or on the eval
+    lever (`delta` is applied at rollout). So one file per training config is exact, and every
+    delta / condition / metric question downstream is a free reload.
+
+    Cache hit iff the file exists AND its meta matches EVERY strict field. Any mismatch RAISES --
+    never silently loaded. `force_retrain=True` skips the load and overwrites.
+    """
+    path = _ckpt_path(dataset, fold, seed, lam, p_train, resample)
+    dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    A = M + 1
+    fdim_expected = 2 * M + cache['C'] + 4        # matches rl_core.build_state layout
+
+    if (not force_retrain) and os.path.exists(path):
+        blob = torch.load(path, map_location='cpu', weights_only=False)
+        meta_disk = blob.get('meta', {})
+        meta_want = _ckpt_meta(dataset, fold, seed, lam, p_train, resample, fdim_expected)
+        if meta_disk.get('format_version') != CHECKPOINT_FORMAT_VERSION:
+            raise ValueError(
+                f"Checkpoint {path} has format_version={meta_disk.get('format_version')}, code "
+                f"expects {CHECKPOINT_FORMAT_VERSION}. Delete it or pass force_retrain=True.")
+        mismatched = [k for k in meta_want
+                      if k != 'format_version' and meta_disk.get(k) != meta_want[k]]
+        if mismatched:
+            raise ValueError(
+                f"Checkpoint {path} has stale fields {mismatched}: "
+                + ', '.join(f'{k}={meta_disk.get(k)!r} != {meta_want[k]!r}' for k in mismatched)
+                + ". Delete it or pass force_retrain=True.")
+        net = ResidualQ(fdim_expected, A).to(dev)
+        net.load_state_dict(blob['state_dict'])
+        net.eval()
+        net._n_patterns = int(meta_disk.get('n_patterns', -1))
+        net._best_it = int(meta_disk.get('best_it', -1))
+        vv = tables if tables is not None else _default_vv(cache, M, md)
+        return net, vv
+
+    net, vv = train(cache, M, md, avail=avail, seed=seed, lam=lam, tables=tables,
+                    resample=resample, p_train=p_train)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({
+        'state_dict': {k: v.cpu() for k, v in net.state_dict().items()},
+        'meta': _ckpt_meta(dataset, fold, seed, lam, p_train, resample,
+                           net.net[0].in_features, extra={
+                               'n_patterns': int(getattr(net, '_n_patterns', -1)),
+                               'best_it': int(getattr(net, '_best_it', -1)),
+                               'fit_split': fit_split,   # 'val' (iemocap/cmi) | 'trainval' (mmfi)
+                           }),
+    }, path)
+    return net, vv
+
+
+@torch.no_grad()
+def _rollout(net, cache, M, md, Sf, Qp, delta=0.0, avail=None, eps=0.0, rng=None):
+    """Same walk as rl_core.rollout_delta, but Q = f_theta(s) + Q_prior(s)."""
+    rng = rng or np.random.default_rng(0)
+    nodes = cache['nodes']; depth, used, ch = rl.node_meta(nodes, M, md)
+    n, N, Fdim = Sf.shape; A = M + 1
+    dev = next(net.parameters()).device
+    Q = _fwd(net, torch.tensor(Sf).reshape(n * N, Fdim).to(dev)).reshape(n, N, A).cpu().numpy() + Qp
+    Q[:, :, M] += delta
+    mk = rl.action_mask_avail(n, M, depth, ch, avail, N)
+    cur = np.zeros(N, int); stopped = np.zeros(N, bool)
+    sn = cur.copy(); first = np.full(N, -1, int)
+    for stp in range(md + 1):
+        for i in np.unique(cur[~stopped]):
+            here = (cur == i) & (~stopped)
+            if not ch[i]:
+                sn[here] = i; stopped |= here; continue
+            Qa = np.where(mk[i][:, :M], Q[i][:, :M], -1e9).max(-1)
+            fin = here & ((~mk[i].any(-1)) | (mk[i][:, M] & (Q[i][:, M] >= Qa)))
+            sn[fin] = i; stopped |= fin
+            go = here & (~fin)
+            if not go.any():
+                continue
+            a = rl._egreedy(Q[i], mk[i], eps, rng)
+            if stp == 0:
+                first[go] = a[go]
+            for (m, c) in ch[i]:
+                cur[go & (a == m)] = c
+        if stopped.all():
+            break
+    sn[~stopped] = cur[~stopped]
+    preds = cache['softmax'][sn, np.arange(N)].argmax(-1)
+    g = float(cache['gflops'][sn].mean()) if 'gflops' in cache else float('nan')
+    return rl.macro_f1(cache['y'], preds), float(depth[sn].mean()), g, sn, first
+
+
+def rollout(net, cache, M, md, vv, lam=LAM, delta=0.0, avail=None, eps=0.0, rng=None):
+    Sf = rl.build_state(cache, M, md, avail)
+    Qp = q_prior(cache, M, md, vv, lam, avail)
+    return _rollout(net, cache, M, md, Sf, Qp, delta, avail, eps, rng)
+
+
+def main():
+    ds, fd = env.DATASET, env._FOLD
+    val = env.get_cache('val', ds, fd); test = env.get_cache('test', ds, fd)
+    M, md = val['M'], env.depth_of(ds)
+    net, vv = train(val, M, md)
+    f1, macq, g, sn, first = rollout(net, test, M, md, vv)
+    print(f"\n[Q-PRIOR DQN — Shapley bootstraps Q, net learns the residual]  {ds} fold{fd} (A0)")
+    print(f"  TEST macro-F1    : {f1:.4f}")
+    print(f"  mean #acquired   : {macq:.2f}  (of {M})")
+    print(f"  mean GFLOPs      : {g:.4f}")
+
+
+if __name__ == '__main__':
+    main()

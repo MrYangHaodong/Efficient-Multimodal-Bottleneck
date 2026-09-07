@@ -1,0 +1,502 @@
+"""
+============================================================================
+  ENVIRONMENT: load a frozen multimodal checkpoint and precompute the
+  cached prefix-tree that the RL policies train/evaluate on.
+
+  TWO WAYS TO USE THIS FILE
+  -------------------------
+  1. SINGLE RUN (the simple path):  edit the CONFIG block below, then
+        python dqn_policy_noexit.py
+  2. SWEEP (3 datasets x 3 folds x 3 seeds):  run_sweep.py ignores CONFIG and
+     drives everything off the CHECKPOINTS registry via
+        get_cache(split, dataset=..., fold=...)
+
+  COST MODEL
+  ----------
+  Cost is UNIFORM (lam per acquired modality) — see the cost-model note in rl_core.
+  `gflops[node]` (fvcore-measured, carried in the cache) is REPORTED per sample for
+  analysis but steers no policy: measured per-modality compute is already ~uniform
+  (cmi 1.01x, czu 1.22x, iemocap 1.28x) and exactly additive, so a GFLOPs cost is just
+  uniform cost rescaled. Raw feature dimension is NOT a cost model either — the shared
+  128-d input projection turns 213x of feature-dim spread into 1.28x of compute.
+============================================================================
+"""
+import itertools
+import json
+import os
+import re
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  CONFIG — single-run path. Edit these; the sweep ignores them.             ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+CHECKPOINT   = "/files1/haodong/Efficient-Multimodal-Bottleneck/runs/dropout_robustness_seqA_dropaug/2026-07-18_iemocap_pv3_branch_seqAbranch/best_model_fold0.pth"
+DATASET      = "iemocap"        # data-loader key in the repo (training/seqA.py)
+SEQ_AGG_MODE = "mean"           # "mean" for mbtAvg / prefixup checkpoints; "gate" for GRU-gate seqA
+MAX_DEPTH    = 6                # single-run fallback only; the sweep uses MAX_DEPTHS[ds] = M
+DATA_ROOT    = "/files1/haodong/data/IEMOCAP"   # or None to use the checkpoint config's path
+# ────────────────────────────────────────────────────────────────────────────
+
+# Paths migrated off the retired /home/group/maestro_visual tree. RUNS and CODE now live in
+# two different roots, so they are separate constants (REPO is the one that holds runs/).
+REPO      = os.environ.get('RLB_REPO', "/files1/haodong/Efficient-Multimodal-Bottleneck")
+CODE_REPO = os.environ.get('RLB_CODE_REPO', "/files1/haodong/test/Efficient-Multimodal-Bottleneck")
+# RLB_CACHE_SUBDIR: write/read caches under cache/<subdir> (e.g. botneck_16 for the
+# K=16 checkpoint set) so different-K caches can never mix. Default: cache/ (K=4 set).
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache",
+                         os.environ.get("RLB_CACHE_SUBDIR", "")).rstrip(os.sep)
+BATCH     = 256
+
+# ── Sweep registry: seqA_BRANCHED (per-modality branches, interleaved enc->fuse)
+#    checkpoints. Recipe = pv3 dropaug (mbtAvg + prefixup + randord), trained by
+#    training/seqA_branched.py. This is the BRANCHED port of the RL environment:
+#    the backbone is models.seqA_branched.SeqABranched, not the batched seqA.
+_BRANCH = f"{REPO}/runs/seqA_branch"
+_RUNDIR = {
+    'iemocap':  f"{_BRANCH}/2026-07-18_iemocap_pv3_branch_seqAbranch",
+    'cmi':      f"{_BRANCH}/2026-07-18_cmi_pv3_branch_seqAbranch",
+    'czu_mhad': f"{_BRANCH}/2026-07-18_czu_mhad_pv3_branch_seqAbranch",
+    'mmfi':     f"{_BRANCH}/2026-07-18_mmfi_pv3_branch_seqAbranch",
+}
+# ── K=16 checkpoint set (bottleneck-ablation winner). Activate with RLB_RUNSET=k16
+#    and pair with RLB_CACHE_SUBDIR=botneck_16 so K=16 caches stay separate.
+_DROPDIR = f"{REPO}/runs/dropout_robustness_seqA_dropaug"
+if os.environ.get('RLB_RUNSET', '').lower() == 'k16':
+    _RUNDIR = {
+        'iemocap':  f"{_DROPDIR}/2026-07-19_iemocap_pv3_branch_16_seqAbranch",
+        'cmi':      f"{_DROPDIR}/2026-07-20_cmi_pv3_branch_16_seqAbranch",
+        'czu_mhad': f"{_DROPDIR}/2026-07-19_czu_mhad_pv3_branch_16_seqAbranch",
+        'mmfi':     f"{_DROPDIR}/2026-07-19_mmfi_pv3_branch_16_seqAbranch",
+        # 5 new datasets trained 2026-07-30 (K=16, pv3_branch recipe)
+        'dsads':    f"{_DROPDIR}/2026-07-30_dsads_pv3_branch_16_seqAbranch",
+        'eav':      f"{_DROPDIR}/2026-07-30_eav_pv3_branch_16_seqAbranch",
+        'pamap2':   f"{_DROPDIR}/2026-07-30_pamap2_pv3_branch_16_seqAbranch",
+        'utd_mhad': f"{_DROPDIR}/2026-07-30_utd_mhad_pv3_branch_16_seqAbranch",
+    }
+# ── K=16 ARCHITECTURE-PARITY set (RLB_RUNSET=k16p, pair with
+#    RLB_CACHE_SUBDIR=botneck_16_parity). The 2026-07-30 new-dataset backbones were
+#    trained enc2/fus4/n_fusion_distill=4 while the original four are enc3/fus3/
+#    distill=0, so their GFLOPs were not comparable. These 2026-08-01 runs retrain the
+#    new four at the original-four architecture. Original-four entries are unchanged
+#    (they already are the reference architecture).
+if os.environ.get('RLB_RUNSET', '').lower() == 'k16p':
+    _RUNDIR = {
+        'iemocap':  f"{_DROPDIR}/2026-07-19_iemocap_pv3_branch_16_seqAbranch",
+        'cmi':      f"{_DROPDIR}/2026-07-20_cmi_pv3_branch_16_seqAbranch",
+        'czu_mhad': f"{_DROPDIR}/2026-07-19_czu_mhad_pv3_branch_16_seqAbranch",
+        'mmfi':     f"{_DROPDIR}/2026-07-19_mmfi_pv3_branch_16_seqAbranch",
+        'dsads':    f"{_DROPDIR}/2026-08-01_dsads_pv3_branch_16_parity_seqAbranch",
+        'eav':      f"{_DROPDIR}/2026-08-01_eav_pv3_branch_16_parity_seqAbranch",
+        'pamap2':   f"{_DROPDIR}/2026-08-01_pamap2_pv3_branch_16_parity_seqAbranch",
+        'utd_mhad': f"{_DROPDIR}/2026-08-01_utd_mhad_pv3_branch_16_parity_seqAbranch",
+    }
+# ── MM-Fi rebalanced subjects (RLB_RUNSET=mmfi_rebal, pair with RLB_CACHE_SUBDIR=botneck_16_mmfi_rebal).
+#    Uses 2026-07-24 rebalanced-subject checkpoint (seqA_mmfi_rebalanced); mmfi only.
+if os.environ.get('RLB_RUNSET', '').lower() == 'mmfi_rebal':
+    _REBAL = f"{REPO}/runs/seqA_mmfi_rebalanced"
+    _RUNDIR = {
+        'mmfi': f"{_REBAL}/2026-07-24_mmfi_pv3_branch_16_seqAbranch",
+    }
+# ── UTD-MHAD dropaug retrain (RLB_RUNSET=utd_mhad_dropaug, pair with
+#    RLB_CACHE_SUBDIR=botneck_16_utd_mhad_dropaug). Uses 2026-08-09 dropaug checkpoint; utd_mhad only.
+if os.environ.get('RLB_RUNSET', '').lower() == 'utd_mhad_dropaug':
+    _RUNDIR = {
+        'utd_mhad': f"{_DROPDIR}/2026-08-09_utd_mhad_pv3_branch_16_seqAbranch",
+    }
+# ── Dropaug retrain (RLB_RUNSET=k16_dropaug, pair with RLB_CACHE_SUBDIR=botneck_16_dropaug).
+#    All 7 datasets retrained 2026-08-08/09 with num_layers=2/num_layers_per_modal=2 dropaug.
+#    dsads fold0/1 landed in the 08-08 run; fold2/3 in 08-09 — patched below after CHECKPOINTS.
+if os.environ.get('RLB_RUNSET', '').lower() == 'k16_dropaug':
+    _RUNDIR = {
+        'iemocap':  f"{_DROPDIR}/2026-08-08_iemocap_pv3_branch_16_seqAbranch",
+        'cmi':      f"{_DROPDIR}/2026-08-08_cmi_pv3_branch_16_seqAbranch",
+        'czu_mhad': f"{_DROPDIR}/2026-08-08_czu_mhad_pv3_branch_16_seqAbranch",
+        'mmfi':     f"{_DROPDIR}/2026-08-08_mmfi_pv3_branch_16_seqAbranch",
+        'dsads':    f"{_DROPDIR}/2026-08-08_dsads_pv3_branch_16_seqAbranch",  # fold0,1 only; fold2,3 patched below
+        'eav':      f"{_DROPDIR}/2026-08-01_eav_pv3_branch_16_parity_seqAbranch",
+        'utd_mhad': f"{_DROPDIR}/2026-08-08_utd_mhad_pv3_branch_16_seqAbranch",
+    }
+FOLDS = {'iemocap': [0, 1, 2], 'cmi': [0, 1, 2], 'czu_mhad': [0, 1, 2], 'mmfi': [0, 1, 2],
+         'dsads': [0, 1, 2, 3], 'eav': [0, 1, 2], 'pamap2': [0, 1, 2, 3], 'utd_mhad': [0, 1, 2]}
+# Branched checkpoints: best_model_fold{N}.pth; per-fold config in results_fold{N}.json;
+# static val-LOO order in valloo_orders.json (Shapley order in shapley_orders.json).
+CHECKPOINTS = {ds: {f: f"{d}/best_model_fold{f}.pth" for f in FOLDS[ds]}
+               for ds, d in _RUNDIR.items()}
+# Patch dsads fold2/3 for the dropaug runset (folds split across two training runs).
+if os.environ.get('RLB_RUNSET', '').lower() == 'k16_dropaug' and 'dsads' in CHECKPOINTS:
+    _dsads2 = f"{_DROPDIR}/2026-08-09_dsads_pv3_branch_16_seqAbranch"
+    CHECKPOINTS['dsads'][2] = f"{_dsads2}/best_model_fold2.pth"
+    CHECKPOINTS['dsads'][3] = f"{_dsads2}/best_model_fold3.pth"
+# MAX_DEPTH = M (protocol §1). A cap below M structurally imposes the behaviour the policy is
+# meant to LEARN (stop early because cost bites), and it means "all modalities" is not a node.
+MAX_DEPTHS = {'iemocap': 6, 'cmi': 7, 'czu_mhad': 7, 'mmfi': 5,
+              'dsads': 5, 'eav': 3, 'pamap2': 4, 'utd_mhad': 4}   # = M. No overrides (§1).
+PV3_DEPTH = 4          # legacy (batched pv3 cache) — unused in the branched port
+DATA_ROOTS = {'iemocap': "/files1/haodong/data/IEMOCAP", 'cmi': None,
+              'czu_mhad': None, 'mmfi': None,
+              'dsads': None, 'eav': None, 'pamap2': None, 'utd_mhad': None}
+# SAX datasets use word_length=2; float datasets use word_length=1 (build_parser default).
+# word_length is NOT stored in results_fold.json so must be set explicitly here.
+WORD_LENGTHS = {'dsads': 2, 'pamap2': 2}
+
+# ── Cache source. The branched backbone has its OWN softmax + GFLOPs profile, so the
+#    batched pv3 caches cannot be reused — always rebuild from the branched checkpoint.
+CACHE_SOURCE = 'build'
+PV3_CACHE = "/home/group/maestro_visual/perf_profiling_payal/RL_pv3/cache"   # legacy, unused
+
+import sys; sys.path.insert(0, CODE_REPO)
+from script.training.seqA import build_parser, build_data    # noqa: E402  (was training.seqA)
+from multimodal_model.seqA_branched import SeqABranched      # noqa: E402  (was models.seqA_branched)
+
+# ── MM-Fi split rebalance ────────────────────────────────────────────────────
+# MM-Fi's stock cross-subject split has val = ONE subject (27 samples, ~1/class for
+# 27 classes; RL noise floor ±0.077) — far too small to fit the Q-net OR select a
+# lever. Move ~6 of test's subjects into val per fold. HYGIENIC: MM-Fi is
+# cross-subject and the backbone trained ONLY on `train` subjects, so both val and
+# test subjects are backbone-held-out — reassigning WHOLE subjects between them
+# leaks nothing (subject-disjointness preserved; train untouched). Applied before
+# any MM-Fi dataloader is built. Requires (re)building the MM-Fi RL cache.
+#   val 27 -> ~189 samples (~7/class), noise floor ±0.077 -> ±0.031.
+import data.MMFi.get_data as _mmfi                          # noqa: E402
+_MMFI_REBALANCE = {
+    0: {'val': [40, 1, 2, 3, 4, 5, 6],       'test': [7, 8, 9, 10, 11, 12, 13]},
+    1: {'val': [40, 14, 15, 16, 17, 18, 19], 'test': [20, 21, 22, 23, 24, 25, 26]},
+    2: {'val': [13, 27, 28, 29, 30, 31, 32], 'test': [33, 34, 35, 36, 37, 38, 39, 40]},
+}
+for _f, _sp in _MMFI_REBALANCE.items():
+    _mmfi._SPLITS[_f]['val'] = list(_sp['val'])            # train stays as trained
+    _mmfi._SPLITS[_f]['test'] = list(_sp['test'])
+
+_FOLD = int(re.search(r'fold(\d+)', os.path.basename(CHECKPOINT)).group(1))
+_SKIP = {'experiment_name', 'model_variant', 'model_class', 'num_classes', 'feature_dims',
+         'selector', 'modality_drop_strategy', 'split_id', 'dataset', 'seq_agg_mode'}
+
+
+def _resolve(dataset, fold):
+    """(dataset, fold) with None falling back to the CONFIG block."""
+    return (DATASET if dataset is None else dataset,
+            _FOLD if fold is None else fold)
+
+
+def depth_of(dataset):
+    return MAX_DEPTHS.get(dataset, MAX_DEPTH)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CACHE LOADING
+# ══════════════════════════════════════════════════════════════════════════════
+def _pv3_path(dataset, fold, split):
+    d = PV3_DEPTH                                    # the pre-built caches are d=4, always
+    return (os.path.join(PV3_CACHE, dataset, f'fold{fold}', split, f'cache_d{d}.npz'),
+            os.path.join(PV3_CACHE, dataset, f'fold{fold}', split, f'manifest_d{d}.json'))
+
+
+def _branch_valloo(dataset, fold):
+    """Static val-LOO modality order (as indices into the canonical modality list)
+    for the BRANCHED backbone, read from valloo_orders.json in the run dir."""
+    ds, fd = _resolve(dataset, fold)
+    ckpt = CHECKPOINTS.get(ds, {}).get(fd, CHECKPOINT)
+    d = os.path.dirname(ckpt)
+    order_names = json.load(open(os.path.join(d, 'valloo_orders.json')))['static_order']
+    mods = list(json.load(open(_branch_cfg_path(ckpt, fd)))['modalities'])
+    return [mods.index(m) for m in order_names if m in mods]
+
+
+def modality_gflops(dataset, fold, split='val'):
+    """Per-modality marginal GFLOPs -> [M] for the BRANCHED backbone, via fvcore.
+
+    The branched model is additive by construction: acquiring modality m runs ONLY its
+    own branch — a per-modal encoder + a fixed-K bottleneck fusion — whose cost is
+    independent of what is already held. So the marginal of m = GFLOPs of the model run
+    on {m} alone, and any set's cost is the sum of its members' marginals (used by
+    _gflops_for_nodes). Cached to CACHE_DIR/{ds}_fold{fd}_branch_modgflops.npz."""
+    ds, fd = _resolve(dataset, fold)
+    path = os.path.join(CACHE_DIR, f'{ds}_fold{fd}_branch_modgflops.npz')
+    if os.path.exists(path):
+        return np.load(path)['cm'].astype(np.float32)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    from fvcore.nn import FlopCountAnalysis
+    model, splits, mods, _C = _load_model(ds, fd)
+    ckpt = CHECKPOINTS.get(ds, {}).get(fd, CHECKPOINT)
+    L = int(json.load(open(_branch_cfg_path(ckpt, fd))).get('max_seq_len', 128))
+    feat_dims = {m: splits['train'][0][0][m].shape[-1] for m in mods}
+
+    class _W(torch.nn.Module):
+        def __init__(self, mm, keep):
+            super().__init__(); self.mm = mm; self.keep = keep
+        def forward(self, inp):
+            return self.mm(inp, order=self.keep)
+
+    cm = []
+    for m in mods:
+        inp = {m: torch.zeros(1, L, feat_dims[m], device='cuda:0')}
+        fa = FlopCountAnalysis(_W(model, [m]).eval(), (inp,))
+        fa.unsupported_ops_warnings(False); fa.uncalled_modules_warnings(False)
+        cm.append(fa.total() / 1e9)
+    cm = np.array(cm, np.float32)
+    np.savez_compressed(path, cm=cm, mods=np.array(mods))
+    print(f'[env] branched per-modality GFLOPs {ds} fold{fd}: '
+          f'{dict(zip(mods, cm.round(4)))}', flush=True)
+    return cm
+
+
+def _gflops_for_nodes(node_keys, cm):
+    """gflops[node] = sum of the acquired modalities' marginals (additive, see modality_gflops)."""
+    return np.array([0.0 if k == '' else float(sum(cm[int(x)] for x in k.split(',')))
+                     for k in node_keys], np.float32)
+
+
+def _load_pv3(dataset, fold, split):
+    """Reuse the pre-built pv3 cache. It already carries fvcore-measured `gflops`,
+    which is why we prefer it over rebuilding. Returns None if not present."""
+    npz, man_p = _pv3_path(dataset, fold, split)
+    if not (os.path.exists(npz) and os.path.exists(man_p)):
+        return None
+    z = np.load(npz, allow_pickle=True)
+    man = json.load(open(man_p))
+    return {'nodes': [str(x) for x in z['nodes']],
+            'softmax': z['softmax'].astype(np.float32),
+            'gflops': z['gflops'].astype(np.float32),       # cumulative GFLOPs at each node
+            'y': z['y'],
+            'mods': list(man['mods']),
+            'M': len(man['mods']),
+            'C': int(z['softmax'].shape[-1]),
+            'valloo_order': [man['mods'].index(m) for m in man['valloo_order']]}
+
+
+def get_cache(split, dataset=None, fold=None):
+    """Cached prefix-tree for one (dataset, fold, split) as a dict:
+         nodes   [n] str   ordered acquired-modality keys ('' = root, '0,2' = 0 then 2)
+         softmax [n,N,C]   frozen model's posterior at each node, per sample
+         gflops  [n]       cumulative measured GFLOPs at each node   <- the cost model
+         y       [N]       ground truth
+         mods, M, C, valloo_order
+    CACHE_SOURCE='pv3' reuses the pre-built caches (fast, has gflops);
+    'build' regenerates the softmax from the checkpoint (no gflops — see gflops()).
+    """
+    ds, fd = _resolve(dataset, fold)
+    md = depth_of(ds)
+    # Branched port: never reuse the batched pv3 cache (different backbone) — always
+    # use the branched-built cache written by _build_or_load / rebuild_caches.py.
+    path = _built_path(ds, fd, split)
+    if os.path.exists(path):
+        return _load_built(path)
+    # NEVER build implicitly: a depth-M build is 15 min (iemocap) to 7 h (cmi) and must not fire
+    # from an innocent get_cache() call. Builds are explicit -> rebuild_caches.py.
+    raise FileNotFoundError(
+        f"No depth-{md} cache for {ds} fold{fd} {split}.\n"
+        f"  MAX_DEPTHS['{ds}'] = {md} but the pre-built caches are depth {PV3_DEPTH}.\n"
+        f"  Build it explicitly (this takes 15 min-7 h):   python rebuild_caches.py {ds}\n"
+        f"  Or set environment.MAX_DEPTHS['{ds}'] = {PV3_DEPTH} to use the existing cache.")
+
+
+def _built_path(ds, fd, split):
+    return os.path.join(CACHE_DIR, f"{ds}_fold{fd}_d{depth_of(ds)}_{split}.npz")
+
+
+def _load_built(path):
+    z = np.load(path, allow_pickle=True)
+    return {'nodes': [str(x) for x in z['nodes']], 'softmax': z['softmax'].astype(np.float32),
+            'gflops': z['gflops'].astype(np.float32), 'y': z['y'],
+            'mods': [str(m) for m in z['mods']], 'M': int(z['M']), 'C': int(z['C']),
+            'valloo_order': [int(v) for v in z['valloo_order']]}
+
+
+def build_cache(split, dataset=None, fold=None):
+    """EXPLICIT build at depth_of(dataset). Called only by rebuild_caches.py."""
+    ds, fd = _resolve(dataset, fold)
+    return _build_or_load(ds, fd, split)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CACHE BUILDING (CACHE_SOURCE='build') — self-contained path, no gflops yet
+# ══════════════════════════════════════════════════════════════════════════════
+def _branch_cfg_path(ckpt, fd):
+    """Branched runs store per-fold config in results_fold{N}.json (no config.json)."""
+    return os.path.join(os.path.dirname(ckpt), f'results_fold{fd}.json')
+
+
+def _load_model(dataset=None, fold=None):
+    """Rebuild the BRANCHED model (SeqABranched) from results_fold{N}.json + restore
+    the checkpoint. Returns (model, data-batches-per-split, mods, num_classes).
+
+    Data is loaded with the shared training.seqA.build_data pipeline (same as the
+    baselines / batched seqA) — it returns per-modality (high, low, y) dicts; the
+    branched model consumes the `high` dict only. The batched model build_data also
+    constructs is discarded."""
+    ds, fd = _resolve(dataset, fold)
+    ckpt = CHECKPOINTS.get(ds, {}).get(fd, CHECKPOINT)
+    cfg = json.load(open(_branch_cfg_path(ckpt, fd)))
+    args = build_parser().parse_args(['--dataset', ds, '--results_dir', '/tmp/rl_unused'])
+    # data-shaping args from the branched config (arch args go to SeqABranched below)
+    for k in ('max_seq_len', 'time_compression_ratio', 'batch_size', 'split_mode'):
+        if cfg.get(k) is not None and hasattr(args, k):
+            setattr(args, k, cfg[k])
+    # word_length is not stored in results_fold.json; use per-dataset table (SAX datasets need 2)
+    args.word_length = WORD_LENGTHS.get(ds, 1)
+    args.fold = fd; args.cuda_pick = 'cuda:0'; args.num_workers = 2
+    root = DATA_ROOTS.get(ds, DATA_ROOT)
+    if root:
+        args.data_root = root
+
+    trb, vb, teb, mods, num_classes, _batched = build_data(args, 'cuda:0', build_model=False)
+    del _batched
+    torch.cuda.empty_cache()
+
+    feat_dims = {m: trb[0][0][m].shape[-1] for m in mods}
+    model = SeqABranched(
+        modalities=mods, feat_dims=feat_dims, num_classes=num_classes,
+        d_model=int(cfg.get('d_model', 128)), nhead=int(cfg.get('nhead', 8)),
+        num_enc_layers=int(cfg.get('num_enc_layers', 3)),
+        num_fusion_layers=int(cfg.get('num_fusion_layers', 3)),
+        n_bottlenecks=int(cfg.get('n_bottlenecks', 8)), mlp_ratio=float(cfg.get('mlp_ratio', 1.0)),
+        dropout=float(cfg.get('dropout', 0.1)), use_sparse_attn=bool(cfg.get('use_sparse_attn', True)),
+        sparse_attn_variant=cfg.get('sparse_attn_variant', 'opt'), factor=int(cfg.get('base_factor', 5)),
+        strat_block_size=int(cfg.get('strat_block_size', 8)), seq_agg_mode=cfg.get('seq_agg_mode', 'mean'),
+        num_fusion_distill=int(cfg.get('num_fusion_distill', 0)),
+        seq_random_order=False).to('cuda:0')
+    state = torch.load(ckpt, map_location='cuda:0', weights_only=False)
+    model.load_state_dict(state, strict=True)
+    model.eval()
+    for mod in model.modules():                             # deterministic value function
+        if getattr(mod, 'use_sparse_attn', False):
+            mod.use_sparse_attn = False
+    return model, {'train': trb, 'val': vb, 'test': teb}, mods, num_classes
+
+
+@torch.no_grad()
+def _forward_prefix(model, batch, order_names, mods, device='cuda:0'):
+    """One forced-order forward over a modality PREFIX; returns softmax [B, K, C],
+    slice [:, k] = prediction after acquiring order_names[0..k].
+
+    Branched model: pass the available modalities as `inputs` and the consumption
+    order via `order=`; return_prefix=True yields the per-step readouts. The k-th
+    prefix (order_names[0..k]) is prefix[:, k]. Only the `high` dict is used."""
+    high, _low, _ = batch
+    inputs = {m: high[m].to(device).float() for m in order_names}
+    _final, pref, _n = model(inputs, order=list(order_names), return_prefix=True)
+    return F.softmax(pref.float(), -1).cpu()
+
+
+def _rebatch(batches):
+    mods = list(batches[0][0].keys())
+    high = {m: torch.cat([b[0][m] for b in batches]) for m in mods}
+    low = {m: torch.cat([b[1][m] for b in batches]) for m in mods}
+    y = torch.cat([b[2] for b in batches]); N = y.shape[0]
+    out = [({m: high[m][s:s + BATCH] for m in mods}, {m: low[m][s:s + BATCH] for m in mods}, y[s:s + BATCH])
+           for s in range(0, N, BATCH)]
+    return out, y.numpy()
+
+
+def _build_cache(model, mods, batches, C, max_depth):
+    """Enumerate every ordered modality prefix up to max_depth and record the model's
+    softmax at each. One forward per depth-max_depth leaf covers its whole ancestor path."""
+    M = len(mods)
+    node_keys = ['']; node_ids = {'': 0}
+    for k in range(1, max_depth + 1):
+        for p in itertools.permutations(range(M), k):
+            node_ids[','.join(map(str, p))] = len(node_keys); node_keys.append(','.join(map(str, p)))
+    N = sum(b[2].shape[0] for b in batches)
+    big = np.empty((len(node_keys), N, C), np.float16); big[0] = 1.0 / C     # root = uniform
+    done = np.zeros(len(node_keys), bool); done[0] = True
+    for leaf in itertools.permutations(range(M), max_depth):
+        todo = [(k, node_ids[','.join(map(str, leaf[:k]))]) for k in range(1, max_depth + 1)
+                if not done[node_ids[','.join(map(str, leaf[:k]))]]]
+        if not todo:
+            continue
+        off = 0
+        for b in batches:
+            pref = _forward_prefix(model, b, [mods[i] for i in leaf], mods)
+            for k, nid in todo:
+                big[nid, off:off + pref.shape[0]] = pref[:, k - 1].numpy().astype(np.float16)
+            off += pref.shape[0]
+        for _, nid in todo:
+            done[nid] = True
+    return node_keys, big
+
+
+def _build_or_load(ds, fd, split):
+    md = depth_of(ds)
+    path = _built_path(ds, fd, split)
+    if os.path.exists(path):
+        return _load_built(path)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cm = modality_gflops(ds, fd)                       # M branched per-modality GFLOPs (fvcore)
+    vlo = _branch_valloo(ds, fd)                        # branched static val-LOO order
+    model, splits, mods, C = _load_model(ds, fd)
+    import time; t0 = time.time()
+    print(f"[env] BUILD {ds} fold{fd} {split}: M={len(mods)} C={C} depth={md} "
+          f"-> {1 + sum(np.prod(range(len(mods), len(mods)-k, -1)) for k in range(1, md+1)):.0f} nodes",
+          flush=True)
+    bs, y = _rebatch(splits[split])
+    nodes, big = _build_cache(model, mods, bs, C, md)
+    gf = _gflops_for_nodes(nodes, cm)
+    np.savez_compressed(path, nodes=np.array(nodes), softmax=big, gflops=gf, y=y,
+                        mods=np.array(mods), M=len(mods), C=C, valloo_order=np.array(vlo))
+    print(f"[env] BUILD done {ds} fold{fd} {split}: {len(nodes)} nodes, "
+          f"{time.time()-t0:.0f}s -> {path}", flush=True)
+    return {'nodes': nodes, 'softmax': big.astype(np.float32), 'gflops': gf, 'y': y,
+            'mods': mods, 'M': len(mods), 'C': C, 'valloo_order': vlo}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TRUE ALL-MODALITY POINT
+#
+#  The cached tree is capped at MAX_DEPTH (4), but M is 6 (iemocap) or 7 (cmi/czu), so the
+#  cache contains NO node where every modality is consumed. Reading "all modalities" off the
+#  cache silently gives the top-MAX_DEPTH prefix of whatever ORDER you hand it -- which moves
+#  the baseline by ~0.10 F1 depending on the order, i.e. it is not a fixed reference at all.
+#
+#  We do not need the full depth-M tree for this (1957 nodes on iemocap, 13700 on cmi).
+#  We need ONE node: the model run with every modality present. That is a single forward
+#  pass per sample, so we compute it directly from the checkpoint and cache the result.
+# ══════════════════════════════════════════════════════════════════════════════
+@torch.no_grad()
+def all_modality(dataset=None, fold=None, split='test', order=None, seed=0):
+    """TRUE all-M-modality prediction: every modality consumed, one forward per sample.
+
+    order : list of modality indices giving the consumption order (the sequential bottleneck
+            is mildly order-dependent even with the full set). None -> the dataset's natural
+            modality order. Pass several orders and average if you want the order-robust point.
+
+    Returns {'softmax': [N,C], 'y': [N], 'mods': [str], 'order': [str], 'gflops': float}.
+    """
+    ds, fd = _resolve(dataset, fold)
+    tag = f"{ds}_fold{fd}_{split}_allmod_s{seed}" + ('' if order is None else '_' + '-'.join(map(str, order)))
+    path = os.path.join(CACHE_DIR, f"{tag}.npz")
+    if os.path.exists(path):
+        z = np.load(path, allow_pickle=True)
+        return {'softmax': z['softmax'].astype(np.float32), 'y': z['y'],
+                'mods': [str(m) for m in z['mods']], 'order': [str(m) for m in z['order']],
+                'gflops': float(z['gflops'])}
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    model, splits, mods, C = _load_model(ds, fd)
+    idx = list(range(len(mods))) if order is None else list(order)
+    names = [mods[i] for i in idx]
+    print(f"[env] all-modality forward: {ds} fold{fd} {split}  order={names}", flush=True)
+    bs, y = _rebatch(splits[split])
+    out = []
+    for b in bs:
+        pref = _forward_prefix(model, b, names, mods)        # [B, M, C]
+        out.append(pref[:, -1].numpy())                      # last slice = ALL modalities
+    soft = np.concatenate(out).astype(np.float32)
+    # cost of the full set = sum of the per-modality marginals (branched cost is additive)
+    g = float('nan')
+    try:
+        g = float(sum(modality_gflops(ds, fd)))
+    except Exception:
+        pass
+    np.savez_compressed(path, softmax=soft, y=y, mods=np.array(mods),
+                        order=np.array(names), gflops=g)
+    return {'softmax': soft, 'y': y, 'mods': mods, 'order': names, 'gflops': g}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COST
+# ══════════════════════════════════════════════════════════════════════════════
+def step_gflops(cache, parent, child):
+    """Marginal measured GFLOPs of the acquire that moves parent -> child."""
+    return float(cache['gflops'][child] - cache['gflops'][parent])
