@@ -114,7 +114,6 @@ def main():
     ap.add_argument('--form', choices=['auto', 'bars', 'heatmap'], default='auto')
     a = ap.parse_args()
     for ds in a.datasets:
-        C = len(load(ds)[1])
         auto = 'heatmap'      # the form the paper uses for every dataset
         form = auto if a.form == 'auto' else a.form
         (bars if form == 'bars' else heatmap)(ds, auto)
