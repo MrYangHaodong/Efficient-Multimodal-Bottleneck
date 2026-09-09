@@ -115,7 +115,7 @@ def main():
     a = ap.parse_args()
     for ds in a.datasets:
         C = len(load(ds)[1])
-        auto = 'heatmap'#'bars' if C <= 5 else 'heatmap'      # the form the paper uses
+        auto = 'heatmap'      # the form the paper uses for every dataset
         form = auto if a.form == 'auto' else a.form
         (bars if form == 'bars' else heatmap)(ds, auto)
 

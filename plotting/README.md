@@ -14,15 +14,15 @@ itself. No repo imports, no absolute paths, no GPU. Regenerate everything with
 
 `plot_selection_by_class.py` holds **one implementation per form, not per dataset** —
 `bars(ds)` draws a panel per class, `heatmap(ds)` draws a class x modality image with a side
-strip for the per-class mean acquired-set size. `--form auto` (the default) picks bars for
-$C\le5$ and heatmap above, which is exactly what the paper uses: bars for **IEMOCAP** (C=4,
-the main-text figure) and **EAV** (C=5), heatmaps for **MM-Fi, CMI, CZU-MHAD, DSADS,
-UTD-MHAD** (C=18--27, where a panel per class stops being readable).
+strip for the per-class mean acquired-set size. `--form auto` (the default) draws a heatmap for
+every dataset, which is what the paper uses throughout: one comparable view across label
+spaces from $C{=}4$ to $C{=}27$, where a panel per class stops being readable. `--form bars`
+is kept because it is the more direct reading when the label space is small.
 
 Asking for the other form writes a suffixed file rather than overwriting the published one:
 
-    python plot_selection_by_class.py --form heatmap --datasets iemocap eav
-    # -> selection_by_class_iemocap_heatmap.pdf, selection_by_class_eav_heatmap.pdf
+    python plot_selection_by_class.py --form bars --datasets iemocap eav
+    # -> selection_by_class_iemocap_bars.pdf, selection_by_class_eav_bars.pdf
 
 Every figure here reproduces the one in the paper **pixel-identically**; that was checked against
 the originals rather than assumed, which is why the cascade CSV stores full float precision
