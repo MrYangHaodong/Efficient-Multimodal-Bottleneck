@@ -39,6 +39,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -68,6 +69,11 @@ from utils.train_utils import (
     get_modality_curriculum, ModalityGradientProfiler,
 )
 from utils.dual_order_val import dual_val, eval_full_order, rand_avg_eval
+
+
+def _snapshot_state(model):
+    """Return an immutable CPU copy suitable for best-checkpoint tracking."""
+    return copy.deepcopy({k: v.detach().cpu() for k, v in model.state_dict().items()})
 
 
 # ============================================================================
@@ -648,6 +654,19 @@ def main():
     exp_dir = os.path.join(args.results_dir, exp_name_full)
     os.makedirs(exp_dir, exist_ok=True)
 
+    wandb_run = None
+    if os.environ.get('WANDB_PROJECT'):
+        import wandb
+        wandb_run = wandb.init(
+            entity=os.environ.get('WANDB_ENTITY') or None,
+            project=os.environ['WANDB_PROJECT'],
+            group=os.environ.get('WANDB_RUN_GROUP') or None,
+            name=os.environ.get('WANDB_RUN_NAME') or exp_name_full,
+            dir=os.environ.get('WANDB_DIR') or exp_dir,
+            config={**vars(args), 'experiment_name': exp_name_full,
+                    'source_commit': os.environ.get('SOURCE_COMMIT', 'unknown')},
+        )
+
     # ---------------------------- aggregate mode ----------------------------
     if args.aggregate:
         fold_results = []
@@ -775,19 +794,41 @@ def main():
             scheduler.step()
 
         # Dual-order val (warm phase only): A = val-LOO order, B = random-order avg.
+        dv = None
         if epoch >= mod_drop_complete_epoch and num_m >= 2:
             dv = dual_val(inner, val_batches, modalities, device, K=DUAL_K, seed=1234 + epoch)
             print(f"  [dual] A(val-LOO order) acc={dv['accA']:.4f} f1={dv['f1A']:.4f} order={dv['orderA']}"
                   f"  |  B(rand-avg/{DUAL_K}) acc={dv['accB']:.4f} f1={dv['f1B']:.4f}")
             if dv['accA'] > bestA['acc']:
                 bestA = {'acc': dv['accA'], 'f1': dv['f1A'], 'epoch': epoch,
-                         'state': model.state_dict(), 'order': dv['orderA']}
+                         'state': _snapshot_state(model), 'order': dv['orderA']}
             if dv['accB'] > bestB['acc']:
-                bestB = {'acc': dv['accB'], 'f1': dv['f1B'], 'epoch': epoch, 'state': model.state_dict()}
+                bestB = {'acc': dv['accB'], 'f1': dv['f1B'], 'epoch': epoch,
+                         'state': _snapshot_state(model)}
 
         if val_acc > cold_best_val_acc:
             cold_best_val_acc, cold_best_val_f1, cold_best_epoch = val_acc, val_f1, epoch
-            cold_best_model_state = model.state_dict()
+            cold_best_model_state = _snapshot_state(model)
+
+        if wandb_run is not None:
+            metrics = {
+                'epoch': epoch,
+                'train/loss': train_loss,
+                'train/accuracy': train_acc,
+                'validation/loss': val_loss,
+                'validation/accuracy': val_acc,
+                'validation/macro_f1': val_f1,
+                'train/modality_drop_base': mod_base,
+                'train/learning_rate': optimizer.param_groups[0]['lr'],
+            }
+            if dv is not None:
+                metrics.update({
+                    'validation/loo_accuracy': dv['accA'],
+                    'validation/loo_macro_f1': dv['f1A'],
+                    'validation/random_average_accuracy': dv['accB'],
+                    'validation/random_average_macro_f1': dv['f1B'],
+                })
+            wandb_run.log(metrics, step=epoch)
 
     # ---------------------------- model selection ---------------------------
     if bestA['state'] is None:
@@ -880,6 +921,23 @@ def main():
                         else "results.json")
     with open(os.path.join(exp_dir, results_filename), 'w') as f:
         json.dump(model_stats, f, indent=4)
+
+    if wandb_run is not None:
+        wandb_run.summary.update({
+            'best_epoch': best_epoch_val,
+            'best_validation_accuracy': best_val_acc,
+            'best_validation_macro_f1': best_val_f1,
+            'test_accuracy': float(test_acc),
+            'test_macro_f1': float(test_f1),
+        })
+        artifact = wandb.Artifact(
+            name=f"{wandb_run.name}-checkpoints", type='model',
+            metadata={'dataset': args.dataset, 'fold': args.fold,
+                      'source_commit': os.environ.get('SOURCE_COMMIT', 'unknown')},
+        )
+        artifact.add_dir(exp_dir)
+        wandb_run.log_artifact(artifact)
+        wandb_run.finish()
 
     profiler.remove_hooks()
     print(f"\nBest Model (Epoch {best_epoch_val}): val_acc={best_val_acc:.4f}  "
