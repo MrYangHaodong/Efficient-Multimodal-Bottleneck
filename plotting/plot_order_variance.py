@@ -5,6 +5,9 @@ backbone.
 Left: per-order F1, centred on each (model, |S|, fold) mean so the SPREAD is the visible
 quantity rather than the level. Right: that spread itself -- the std across orderings,
 averaged over folds.
+
+Publication layout with a shared legend, boxed axes, and editable vector text.
+Each run updates the same PDF, SVG, and PNG files next to this script.
 """
 import csv
 import os
@@ -14,11 +17,16 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+import iclr_style
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'order_variance_iemocap')
 MODELS = ['random-order trained', 'fixed-order trained']
-COL = {'random-order trained': '#228833', 'fixed-order trained': '#77324C'}
+# Match the paper's purple/orange comparison palette used by plot_cascade.py.
+COL = {'random-order trained': '#AA4499', 'fixed-order trained': '#EE7733'}
+MARKERS = {'random-order trained': 'o', 'fixed-order trained': 's'}
 
 
 def load():
@@ -32,8 +40,21 @@ def load():
 def main():
     D = load()
     KS = sorted(int(k) for k in D[MODELS[0]])
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(7.5, 2.6),
-                                   gridspec_kw=dict(width_ratios=[1.35, 1]))
+    iclr_style.apply()
+    plt.rcParams.update({
+        'font.family': 'DejaVu Sans',
+        'font.size': 16,
+        'axes.labelsize': 18,
+        'xtick.labelsize': 16,
+        'ytick.labelsize': 16,
+        'legend.fontsize': 16,
+        'axes.edgecolor': 'black',
+        'svg.fonttype': 'none',
+        'savefig.facecolor': 'white',
+    })
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.2, 4.9),
+                                   gridspec_kw=dict(width_ratios=[1.28, 1]))
+    fig.subplots_adjust(left=.105, right=.99, bottom=.19, top=.845, wspace=.36)
     rng = np.random.default_rng(0)
 
     # ---- left: per-order deviation from each (model, k, fold) mean ----
@@ -44,39 +65,72 @@ def main():
                 a = np.array(f1s); dev.append(a - a.mean())
             dev = np.concatenate(dev)
             x = k + (mi - 0.5) * 0.34
-            axL.scatter(x + rng.normal(0, .045, dev.size), dev * 100, s=4.5, alpha=.55,
-                        color=COL[name], edgecolors='none',
-                        label=name if k == KS[0] else None)
-            axL.plot([x - .12, x + .12], [dev.std() * 100] * 2, color=COL[name], lw=1.1)
-            axL.plot([x - .12, x + .12], [-dev.std() * 100] * 2, color=COL[name], lw=1.1)
-    axL.axhline(0, color='0.6', lw=.6, ls=':')
-    axL.set_xticks(KS); axL.set_xlabel('modalities in the fixed subset  $|S|$', fontsize=7.4)
-    axL.set_ylabel('macro-F1 deviation from\nthe subset mean (pts)', fontsize=7.4)
-    axL.tick_params(labelsize=6.8, length=2, pad=1.5)
-    axL.set_title('every ordering of the same subset', fontsize=8)
-    axL.legend(fontsize=6.2, loc='lower left', framealpha=.9, borderpad=.3, handletextpad=.4)
-    for s in ('top', 'right'): axL.spines[s].set_visible(False)
+            axL.scatter(x + rng.normal(0, .045, dev.size), dev * 100, s=15, alpha=.62,
+                        color=COL[name], marker=MARKERS[name], edgecolors='none', zorder=3)
+            axL.plot([x - .12, x + .12], [dev.std() * 100] * 2,
+                     color=COL[name], lw=1.7, zorder=4)
+            axL.plot([x - .12, x + .12], [-dev.std() * 100] * 2,
+                     color=COL[name], lw=1.7, zorder=4)
+    axL.axhline(0, color='#888888', lw=.8, ls=':', zorder=2)
+    axL.set_xticks(KS)
+    axL.set_ylabel('Macro-F1 deviation from\nsubset mean (pts)', labelpad=7)
+    axL.margins(x=.06, y=.09)
+    axL.set_yticks([-6, -4, -2, 0, 2, 4])
 
     # ---- right: std across orders ----
-    w = 0.36
+    w = .30
     for mi, name in enumerate(MODELS):
         stds = [np.mean([np.std(v) for v in D[name][str(k)].values()]) * 100 for k in KS]
-        axR.bar(np.arange(len(KS)) + (mi - .5) * w, stds, w, color=COL[name],
-                edgecolor='black', linewidth=.5, label=name)
-        for xi, v in zip(np.arange(len(KS)) + (mi - .5) * w, stds):
-            axR.text(xi, v + .06, f'{v:.2f}', ha='center', va='bottom', fontsize=5.8)
-    axR.set_xticks(np.arange(len(KS))); axR.set_xticklabels(KS, fontsize=6.8)
-    axR.set_xlabel('modalities in the fixed subset  $|S|$', fontsize=7.4)
-    axR.set_ylabel('std across orderings (pts)', fontsize=7.4)
-    axR.tick_params(labelsize=6.8, length=2, pad=1.5)
-    axR.set_title('spread is $\\sim$5$\\times$ smaller', fontsize=8)
-    axR.grid(axis='y', ls=':', lw=.45, alpha=.55); axR.set_axisbelow(True)
-    for s in ('top', 'right'): axR.spines[s].set_visible(False)
+        # Leave room for the short-bar labels beside the taller neighboring bars.
+        positions = np.arange(len(KS)) + (mi - .5) * .5
+        axR.bar(positions, stds, w, color=COL[name],
+                edgecolor='black', linewidth=.65,
+                hatch='///' if mi else None, zorder=3)
+        for xi, v in zip(positions, stds):
+            axR.text(xi, v + .055, f'{v:.2f}', ha='center', va='bottom',
+                     fontsize=13.5, zorder=4)
+    axR.set_xticks(np.arange(len(KS)), KS)
+    # With the y-label rotated 90 degrees, a left arrow points down on the page.
+    axR.set_ylabel('Order-wise Macro-F1 SD\n(pts, mean over folds)\n'
+                   '\u2190 lower is better', labelpad=7)
+    axR.set_ylim(0, 3.3)
+    axR.set_yticks(np.arange(0, 3.1, .5))
 
-    fig.tight_layout(w_pad=1.4)
-    for ext in ('pdf', 'png'):
-        fig.savefig(f'{OUT}.{ext}', dpi=300, bbox_inches='tight')
-    print('wrote', OUT + '.pdf')
+    for panel, ax in zip(('a', 'b'), (axL, axR)):
+        ax.grid(axis='y', color='#E5E7E9', linewidth=.65)
+        ax.set_axisbelow(True)
+        ax.tick_params(direction='out', length=3, width=.8, pad=4, colors='black')
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('black')
+            spine.set_linewidth(1.0)
+        ax.text(.025, .96, f'({panel})', transform=ax.transAxes,
+                ha='left', va='top', fontsize=16, color='black')
+
+    handles = [
+        Line2D([], [], linestyle='none', marker=MARKERS[name], markersize=7,
+               markerfacecolor=COL[name], markeredgecolor=COL[name],
+               label=name.capitalize())
+        for name in MODELS
+    ]
+    handles.append(Line2D([], [], color='#444444', linewidth=1.7,
+                          label=r'$\pm$1 SD (a)'))
+    legend = fig.legend(
+        handles=handles, ncol=len(handles), loc='lower center',
+        bbox_to_anchor=(.5475, .859), frameon=True, fancybox=False,
+        framealpha=1, facecolor='white', edgecolor='#B9B9B9',
+        borderaxespad=0, borderpad=.3, columnspacing=1.2,
+        handlelength=1.1, handletextpad=.45,
+    )
+    legend.get_frame().set_linewidth(.6)
+    fig.supxlabel('Number of modalities in the fixed subset, $|S|$',
+                  x=.5475, y=.026, fontsize=20)
+
+    for ext in ('pdf', 'svg', 'png'):
+        path = f'{OUT}.{ext}'
+        fig.savefig(path, dpi=400, bbox_inches='tight', pad_inches=.05)
+        print('wrote', path)
+    plt.close(fig)
 
     print('\n=== std across orderings (F1 points), mean over folds ===')
     print(f"{'|S|':>4s} {'random-order':>13s} {'fixed-order':>12s} {'ratio':>6s}")

@@ -1,7 +1,8 @@
 # plotting — paper figures and the values behind them
 
 Self-contained: each script reads only its CSV in `data/` and writes the PDF/PNG next to
-itself. No repo imports, no absolute paths, no GPU. Regenerate everything with
+itself. The order-variance script also exports editable SVG. No repo imports outside this
+directory, no absolute paths, no GPU. Regenerate everything with
 
     python plot_cascade.py && python plot_selection_by_class.py && \
     python plot_sensitivity.py && python plot_teaser_frontier.py && \
@@ -28,10 +29,22 @@ Asking for the other form writes a suffixed file rather than overwriting the pub
     python plot_selection_by_class.py --form bars --datasets iemocap eav
     # -> selection_by_class_iemocap_bars.pdf, selection_by_class_eav_bars.pdf
 
-Every figure here reproduces the one in the paper **pixel-identically**; that was checked against
+Except for the restyled order-variance, cascade, and class-selection figures, these figures reproduce the ones in the paper
+**pixel-identically**; that was checked against
 the originals rather than assumed, which is why the cascade CSV stores full float precision
 and uses the non-breaking hyphen (U+2011) in `m‑hand` / `m‑head` / `m‑rot`. Rounding those
 values to 4 decimals, or using an ordinary hyphen, both change the rendering.
+
+The cascade and class-selection scripts now use SeMARC purple, black axes, larger print-size
+labels, no overall title, tight spacing, embedded PDF fonts, and 600-dpi PNG output. Their
+CSV measurements are unchanged; the cascade retains its supplied standard-deviation bars.
+Both scripts accept `--font-size`, `--width-inches`, `--height-inches`, `--dpi`, and
+`--output-dir`. Dimensions refer to the Matplotlib canvas: class-selection exports trim
+the margins, while the cascade preserves the exact canvas size.
+Class-selection heatmaps also accept `--annotate` for two-decimal probability labels:
+
+    python plot_selection_by_class.py --datasets iemocap --annotate
+    python plot_cascade.py --width-inches 5.5 --font-size 10
 
 ## What the data columns mean
 
@@ -57,6 +70,10 @@ moves left as well as down.
 `subset_size` runs 2--6 and the orderings per subset are capped at 24, so |S|=2 has 2 rows per
 fold, |S|=3 has 6, and |S|>=4 has 24. The figure never plots the level, only the deviation from
 each (training, |S|, fold) mean, so what it shows is the spread the ordering induces.
+Panel (a) retains all 480 observations, with horizontal marks at plus/minus one population
+standard deviation of the fold-centred observations pooled within each training/subset group.
+Panel (b) shows the population standard deviation across orders within each fold, averaged
+over the three folds. These are different summaries of spread, not confidence intervals.
 
 **`sensitivity_iemocap.csv`** — one row per swept value of the three fixed hyperparameters
 (`lambda_DS`, `lambda_KD`, `K`). `f1_order_averaged` is the mean over 24 permutations of the
@@ -75,6 +92,8 @@ is the plotting layer only.
 Two of these figures are not currently placed in the paper: `teaser_frontier.pdf` is in
 `figures/` but its `figure` environment in `introduction.tex` is commented out, and
 `order_variance_iemocap.pdf` supports the order-insensitivity appendix (`app:order`), which is
-still a stub. Both scripts reproduce their PDF pixel-identically as it stands today.
-`plot_order_variance.py` predates the shared `iclr_style.py` and sets its own fonts and sizes;
-it was left that way so it still reproduces exactly.
+still a stub. The teaser script retains its original pixel-identical rendering.
+`plot_order_variance.py` was restyled for publication on 2026-09-16, using `iclr_style.py`
+with larger type, black boxed axes, a light one-row shared legend, and no subplot titles.
+The source CSV and statistical calculations are unchanged. Running the script updates the
+same `order_variance_iemocap.pdf`, `.svg`, and 400-dpi `.png` files in this directory.
