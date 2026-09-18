@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Publication figures for class-conditional selection, P(j in S | y).
 
-The default is a heatmap for every dataset, with a common probability scale
-and a separate strip for the mean acquired-set size. Optional bars retain one
-panel per class and use the paper's categorical colors. CSV values and class
+The default is a compact heatmap for every dataset, with a common probability
+scale and no mean acquired-set-size strip. Optional bars retain one panel per
+class and use the paper's categorical colors. CSV values and class
 order are unchanged; the figures show means, not uncertainty estimates.
 
 No figure title or outer frame is added. PDF fonts are embedded, and PNGs are
@@ -163,10 +163,10 @@ def heatmap(ds, auto='heatmap', *, output_dir=None, font_size=10.0,
     C, M = P.shape
     # Keep dense class labels readable at their native print size.
     row_height = max(0.17, 1.4 * font_size / 72)
-    fig, (ax, axk, cax) = plt.subplots(
-        1, 3, figsize=(width or max(4.2, 0.48 * M + 2.0),
+    fig, (ax, cax) = plt.subplots(
+        1, 2, figsize=(width or max(3.6, 0.40 * M + 1.4),
                        height or max(2.0, row_height * C + 0.82)),
-        gridspec_kw=dict(width_ratios=[M, 0.85, 0.16]), layout='constrained')
+        gridspec_kw=dict(width_ratios=[M, 0.16]), layout='constrained')
     fig.set_constrained_layout_pads(w_pad=0.025, h_pad=0.025, wspace=0.035, hspace=0.02)
     im = ax.imshow(P, aspect='auto', cmap=CMAP, vmin=0, vmax=1, interpolation='nearest')
     ax.set_xticks(range(M))
@@ -187,13 +187,6 @@ def heatmap(ds, auto='heatmap', *, output_dir=None, font_size=10.0,
             ax.text(m, c, f'{P[c, m]:.2f}', ha='center', va='center',
                     fontsize=font_size - 1,
                     color='white' if P[c, m] >= 0.6 else 'black')
-    axk.barh(range(C), k, color=PURPLE, height=0.76, zorder=3)
-    axk.set_ylim(ax.get_ylim()); axk.set_yticks([])
-    axk.set_xlim(0, M); axk.set_xticks([0, M])
-    axk.set_xlabel('Mean\n$|S|$', fontsize=font_size, labelpad=3)
-    axk.grid(True, axis='x', lw=0.5, color='#DEDEDE')
-    axk.set_axisbelow(True)
-    frame(axk)
     cb = fig.colorbar(im, cax=cax, ticks=[0, 0.5, 1])
     cb.set_label(r'$P(j \in S \mid y)$', fontsize=font_size + 1, labelpad=5)
     cb.ax.yaxis.set_major_formatter(StrMethodFormatter('{x:g}'))

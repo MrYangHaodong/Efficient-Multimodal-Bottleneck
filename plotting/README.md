@@ -18,8 +18,8 @@ directory, no absolute paths, no GPU. Regenerate everything with
 | `iclr_style.py` | shared style (colours, grid, spines, error bars) | — |
 
 `plot_selection_by_class.py` holds **one implementation per form, not per dataset** —
-`bars(ds)` draws a panel per class, `heatmap(ds)` draws a class x modality image with a side
-strip for the per-class mean acquired-set size. `--form auto` (the default) draws a heatmap for
+`bars(ds)` draws a panel per class, `heatmap(ds)` draws a class x modality image with a
+probability colorbar. `--form auto` (the default) draws a heatmap for
 every dataset, which is what the paper uses throughout: one comparable view across label
 spaces from $C{=}4$ to $C{=}27$, where a panel per class stops being readable. `--form bars`
 is kept because it is the more direct reading when the label space is small.
@@ -41,7 +41,9 @@ CSV measurements are unchanged; the cascade retains its supplied standard-deviat
 Both scripts accept `--font-size`, `--width-inches`, `--height-inches`, `--dpi`, and
 `--output-dir`. Dimensions refer to the Matplotlib canvas: class-selection exports trim
 the margins, while the cascade preserves the exact canvas size.
-Class-selection heatmaps also accept `--annotate` for two-decimal probability labels:
+Class-selection heatmaps omit the redundant mean acquired-set-size strip and use a
+narrower canvas (3.8 inches for IEMOCAP), keeping the fonts and probability scale
+unchanged. They also accept `--annotate` for two-decimal probability labels:
 
     python plot_selection_by_class.py --datasets iemocap --annotate
     python plot_cascade.py --width-inches 5.5 --font-size 10
