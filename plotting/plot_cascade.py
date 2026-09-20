@@ -8,10 +8,13 @@ Top: macro-F1 as the available set shrinks, for SeMARC and for the same frozen b
 consuming everything available. Bottom: what that costs, as modality usage.
 
 With no arguments, write firstpick_cascade_iemocap.pdf and .png beside this script.
-The 4.0 x 2.02 inch canvas keeps the height of selection_by_class_iemocap.png
-but is narrower (2400 x 1212 pixels at 600 dpi). Both panels share cumulative
+The 4.0 x 2.60 inch canvas is 2400 x 1560 pixels at 600 dpi. Panels (a) and (b)
+show macro-F1 and modality usage, respectively. Both panels share cumulative
 availability labels; w/o means without all listed modalities, and parentheses
 give the remaining modality count.
+Axis titles use 8 pt and tick labels 7 pt at the default base font size.
+Modality-usage annotations show mean acquired / available modality counts;
+the mean count is rounded to one decimal, while the plotted fractions are unchanged.
 The source CSV and its recorded mean/std values are never modified.
 """
 from __future__ import annotations
@@ -34,7 +37,7 @@ OUT = HERE / 'firstpick_cascade_iemocap'
 PURPLE = '#AA4499'
 ORANGE = '#EE7733'
 DEFAULT_WIDTH = 4.0
-DEFAULT_HEIGHT = 1212 / 600
+DEFAULT_HEIGHT = 2.60
 SHORT = {'text': 'text', 'audio': 'audio', 'video': 'video',
          'mocap_hand': 'm‑hand', 'mocap_head': 'm‑head', 'mocap_rotated': 'm‑rot'}
 
@@ -101,12 +104,15 @@ def availability_labels(rows):
 
 def build_figure(font_size=10.0, width_inches=DEFAULT_WIDTH, height_inches=DEFAULT_HEIGHT):
     """Draw both panels without altering or rounding the source observations."""
+    label_size = max(7.0, font_size - 2)
+    tick_size = max(6.5, font_size - 3)
+    annotation_size = max(6.0, font_size - 4)
     plt.rcParams.update({
         'font.family': 'DejaVu Sans', 'font.size': font_size,
         'mathtext.fontset': 'dejavusans',
-        'axes.labelsize': font_size, 'axes.labelcolor': 'black',
-        'xtick.labelsize': font_size - 2, 'ytick.labelsize': font_size - 1,
-        'axes.linewidth': 0.75, 'axes.edgecolor': 'black',
+        'axes.labelsize': label_size, 'axes.labelcolor': 'black',
+        'xtick.labelsize': tick_size, 'ytick.labelsize': tick_size,
+        'axes.linewidth': 0.65, 'axes.edgecolor': 'black',
         'xtick.color': 'black', 'ytick.color': 'black',
         'text.color': 'black', 'pdf.fonttype': 42, 'ps.fonttype': 42,
         'svg.fonttype': 'none', 'savefig.facecolor': 'white',
@@ -115,72 +121,83 @@ def build_figure(font_size=10.0, width_inches=DEFAULT_WIDTH, height_inches=DEFAU
     x = np.arange(len(rows))
 
     fig, (axL, axR) = plt.subplots(2, 1, figsize=(width_inches, height_inches), sharex=True)
-    line_options = dict(lw=1.5, markeredgecolor='white', markeredgewidth=0.7)
+    line_options = dict(lw=1.35, markeredgecolor='white', markeredgewidth=0.6)
     for values, std, color, marker, style, label in (
-        (f1, sd, PURPLE, 'o', '-', 'SeMARC (Ours)'),
-        (rf1, rsd, ORANGE, 's', '--', 'SeMA (all available)'),
+        (f1, sd, PURPLE, 'o', '-', 'SeMARC'),
+        (rf1, rsd, ORANGE, 's', '--', 'SeMA (all modalities)'),
     ):
         container = axL.errorbar(
             x, values, yerr=std, color=color, ecolor=color, marker=marker,
-            ls=style, ms=5.5 if marker == 'o' else 4.6, elinewidth=0.85,
+            ls=style, ms=5.0 if marker == 'o' else 4.4, elinewidth=0.85,
             capsize=2.0, capthick=0.85, zorder=3 if marker == 'o' else 2,
             label=label, **line_options,
         )
         for artist in (*container.lines[1], *container.lines[2]):
-            artist.set_alpha(0.42)
+            artist.set_alpha(0.60)
 
     # Place first-pick labels beyond both error bars, not over the uncertainty.
     annotation_y = np.maximum(f1 + sd, rf1 + rsd) + 0.026
     for xi, yi, m in zip(x, annotation_y, first):
         axL.annotate(SHORT.get(m, m), (xi, yi), ha='center', va='bottom',
-                     fontsize=font_size - 1.5, color=PURPLE)
+                     fontsize=annotation_size, color='black')
     axL.set_ylabel('Macro-F1', labelpad=2)
     lower = min(0.10, float(np.min(np.minimum(f1 - sd, rf1 - rsd))) - 0.025)
     axL.set_ylim(lower, max(1.0, float(annotation_y.max()) + 0.23))
     axL.set_yticks([0.2, 0.5, 0.8])
 
     reference_mu = np.array([float(row['ref_mu_mean']) for row in rows])
-    axR.plot(x, mu, color=PURPLE, marker='o', ms=5.5, zorder=3, **line_options)
-    axR.plot(x, reference_mu, color=ORANGE, ls='--', lw=1.5, zorder=2)
-    axR.set_ylabel('Modality\nusage', labelpad=2, fontsize=font_size - 0.5)
+    axR.plot(x, mu, color=PURPLE, marker='o', ms=5.0, zorder=3, **line_options)
+    axR.plot(x, reference_mu, color=ORANGE, ls='--', lw=1.35, zorder=2)
+    for xi, yi, row, available in zip(x, mu, rows, nA):
+        acquired = float(row['mean_k'])
+        axR.annotate(f'{acquired:.1f}/{available}', (xi, yi), xytext=(0, -5),
+                     textcoords='offset points', ha='center', va='top',
+                     fontsize=annotation_size, color='black')
+    axR.set_ylabel('Modality\nusage', labelpad=2)
     axR.set_ylim(0.0, max(1.10, float(max(mu.max(), reference_mu.max())) + 0.10))
     axR.set_yticks([0.0, 0.5, 1.0])
 
-    for ax in (axL, axR):
+    for panel_label, ax in zip(('(a)', '(b)'), (axL, axR)):
+        ax.text(0.02, 0.96, panel_label, transform=ax.transAxes,
+                ha='left', va='top', fontsize=label_size, color='black',
+                bbox=dict(facecolor='white', edgecolor='none', pad=0.1))
         ax.set_axisbelow(True)
-        ax.grid(True, color='#E1E1E1', linewidth=0.45, linestyle='-')
+        ax.grid(True, axis='y', color='#E6E6E6', linewidth=0.4, linestyle='-')
         ax.set_xticks(x)
         ax.set_xlim(-0.48, len(x) - 0.52)
-        ax.tick_params(direction='out', length=2.5, width=0.6, pad=2)
+        ax.tick_params(direction='out', length=2.2, width=0.55, pad=1.5)
         for spine in ax.spines.values():
             spine.set_visible(True)
             spine.set_color('black')
-            spine.set_linewidth(0.75)
+            spine.set_linewidth(0.65)
     axR.set_xticklabels(availability_labels(rows))
+    for label in axR.get_xticklabels():
+        label.set_linespacing(1.0)
+    axR.set_xlabel('Availability (remaining count)', labelpad=2)
     axL.tick_params(axis='x', labelbottom=False, length=0)
     fig.align_ylabels((axL, axR))
 
     handles = [
-        Line2D([], [], color=PURPLE, marker='o', ms=5.5,
-               label='SeMARC (Ours)', **line_options),
-        Line2D([], [], color=ORANGE, ls='--', marker='s', ms=4.6,
-               label='SeMA (all available)', **line_options),
+        Line2D([], [], color=PURPLE, marker='o', ms=4.2,
+               label='SeMARC', **line_options),
+        Line2D([], [], color=ORANGE, ls='--', marker='s', ms=3.8,
+               label='SeMA (all modalities)', **line_options),
     ]
+    left_margin = 0.51 / width_inches
+    right_margin = 1 - 0.035 / width_inches
     legend = fig.legend(
-        handles=handles, loc='upper center', bbox_to_anchor=(0.54, 1.01),
-        ncol=2, fontsize=font_size - 2, frameon=True, fancybox=False,
+        handles=handles, loc='upper center',
+        bbox_to_anchor=((left_margin + right_margin) / 2, 1 - 0.02 / height_inches),
+        ncol=2, fontsize=max(6.0, font_size - 3), frameon=True, fancybox=False,
         framealpha=1.0, facecolor='#FAFAFA', edgecolor='#B8B8B8',
-        columnspacing=1.0, handlelength=1.5, handletextpad=0.5, borderpad=0.3,
+        columnspacing=0.8, handlelength=1.3, handletextpad=0.4, borderpad=0.25,
+        borderaxespad=0,
     )
     legend.get_frame().set_linewidth(0.55)
-    # The first two ticks have short labels; use the space underneath them so
-    # this description does not collide with the longer cumulative lists.
-    left_margin = 0.69 / width_inches
-    fig.text(left_margin, 0.012, 'Availability (remaining count)', ha='left', va='bottom',
-             fontsize=font_size - 1)
-    fig.subplots_adjust(left=left_margin, right=1 - 0.075 / width_inches,
-                        top=1 - 0.28 / height_inches,
-                        bottom=0.57 / height_inches, hspace=0.16)
+    # Keep physical margins tight while the added height goes to the data panels.
+    fig.subplots_adjust(left=left_margin, right=right_margin,
+                        top=1 - 0.21 / height_inches,
+                        bottom=0.53 / height_inches, hspace=0.10)
     return fig
 
 

@@ -943,8 +943,7 @@ def render_dataset_platforms(
             which="major", direction="out", length=3.0, width=0.65, pad=2.0
         )
         ax.tick_params(which="minor", direction="out", length=1.8, width=0.45)
-        panel_name = "CPU (MBT est.)" if platform == "CPU" else platform
-        panel_label = f"({chr(ord('a') + panel_index)}) {panel_name}"
+        panel_label = f"({chr(ord('a') + panel_index)}) {platform}"
         ax.text(
             0.035,
             0.955,
