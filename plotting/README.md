@@ -99,3 +99,31 @@ still a stub. The teaser script retains its original pixel-identical rendering.
 with larger type, black boxed axes, a light one-row shared legend, and no subplot titles.
 The source CSV and statistical calculations are unchanged. Running the script updates the
 same `order_variance_iemocap.pdf`, `.svg`, and 400-dpi `.png` files in this directory.
+
+## Selected IEMOCAP ablations
+
+`python plotting/plot_ablation.py` (from the repository root) updates the same
+`ablation_iemocap.pdf`, `.svg`, and 600-dpi `.png` files beside the script. This is one
+F1-only panel containing the user's final selection: four RL and three backbone
+ablations at 0% missingness. The seven scores are preserved inline in the script from
+the supplied table (2026-09-20); the supplied baseline is Macro-F1 = 0.668.
+
+Bars show `100 * (F1_variant - 0.668) / 0.668`, with F1 in parentheses. Both are
+displayed to two decimals; calculations retain the original four-decimal scores. Negative
+percentages are relative decreases from the full model, not percentage-point changes
+or full-model gains divided by an ablated score. No uncertainty was supplied.
+The downward-bar layout follows [Figure 6, page 9](https://arxiv.org/pdf/2509.25278#page=9),
+but uses relative Macro-F1 instead of that reference's absolute accuracy drops.
+All bars use the paper's Macro-F1 purple (`#AA4499`). A dotted vertical divider
+separates ARC (RL) from SeMA (backbone); these group names appear as unboxed
+Times New Roman text inside the plot. Category labels sit above the plot.
+Times New Roman must be installed; the script rejects silent font substitution.
+Axis lettering is enlarged by another 4 pt: 22 pt x/y tick labels and a 25.5 pt
+axis label; values/group labels remain 19.5 pt. The 16.15 x 6.45 inch canvas and
+category spacing fit the exact two-line labels without overlap or clipping.
+The labels, left to right, are Heuristic policy (no RL), No Q-prior
+($Q_0=0$), Masks-only state, Predictive-summary state only, Fixed-order training,
+Bottleneck tokens last, and Final-prefix CE only. The original source descriptions
+and full-precision measurements remain in the script. The figure retains black
+boundaries and no title or source footnote. The no-RL heuristic uses F1 = 0.6443,
+not the separate no-learned-stop row.
