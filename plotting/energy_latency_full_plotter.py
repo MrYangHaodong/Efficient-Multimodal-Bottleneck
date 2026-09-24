@@ -1028,21 +1028,31 @@ def render_dataset_platforms(
         )
         for method in methods
     ]
+    legend_columns = len(method_handles)
+    if extra_font_points:
+        legend_columns = math.ceil(len(method_handles) / 2)
+        # Matplotlib fills columns first; preserve the method order when
+        # reading the compact legend across its first and second rows.
+        method_handles = [
+            method_handles[index]
+            for column in range(legend_columns)
+            for index in (column, column + legend_columns)
+            if index < len(method_handles)
+        ]
     legend = fig.legend(
         handles=method_handles,
-        loc="lower left" if extra_font_points else "upper center",
-        bbox_to_anchor=(0.012, 0.775, 0.978, 0.1) if extra_font_points else (0.5, 0.995),
-        mode="expand" if extra_font_points else None,
+        loc="lower center" if extra_font_points else "upper center",
+        bbox_to_anchor=(0.5, 0.775) if extra_font_points else (0.5, 0.995),
         borderaxespad=0.0 if extra_font_points else 0.5,
-        ncol=len(method_handles),
+        ncol=legend_columns,
         frameon=True,
         fancybox=False,
         framealpha=1.0,
         facecolor="white",
         edgecolor="#B8B8B8",
         columnspacing=0.45,
-        handlelength=0.65,
-        handletextpad=0.15 if extra_font_points else 0.20,
+        handlelength=1.0 if extra_font_points else 0.65,
+        handletextpad=0.25 if extra_font_points else 0.20,
         borderpad=0.20,
         labelspacing=0.35,
         fontsize=panel_font(8.6) - (2.0 if extra_font_points else 0.0),
@@ -1071,7 +1081,7 @@ def render_dataset_platforms(
             [position.x0 - 0.020, position.y0, position.width, position.height]
         )
         first_ax.set_in_layout(True)
-    # Keep the requested font sizes and complete model labels in one row.
+    # Non-target figures retain the original one-row legend sizing behavior.
     fig.canvas.draw()
     legend_width = legend.get_window_extent(fig.canvas.get_renderer()).width / fig.dpi
     if not extra_font_points and legend_width + 0.30 > fig.get_figwidth():

@@ -21,13 +21,15 @@ All bars use the paper's Macro-F1 purple. A dotted divider separates ARC (RL)
 from SeMA (backbone); plain Times New Roman labels sit inside their sections.
 Category labels appear above the plot. Times New Roman must be installed;
 the script refuses a silent font substitution.
-All text is enlarged by another 4 points: ticks 36 pt and the axis label
-39.5 pt; values/group labels are 27.5 pt. Display rounding never changes
-bar heights. Top labels use one row tilted 45 degrees, with compact 0.95 line
-spacing for multiline labels. The y-axis title uses 1.0 line
-spacing and wraps onto two lines. The 16.15-inch width is retained, with an
-8.8-inch working height to fit the larger text and complete mask expression;
-there are no staggered label levels or guide lines.
+Category labels and y ticks are 36 pt; the axis title is 39.5 pt, and values/
+group labels are 27.5 pt. Category parentheticals are 2 pt smaller (34 pt),
+inline on the same baseline. All seven category labels are horizontal and
+single-line, centered over their bars. The wider 36.8 x 6.6 inch canvas fits
+the complete labels without reducing the main fonts. Bars are 0.5 inches
+wide, about 40% thinner than the previous 0.832-inch bars. Label widths
+determine category spacing; there are no staggered levels or guide lines.
+The y-axis title retains its two-line wrap and 1.0 line spacing.
+Display rounding never changes bar heights.
 All three exports are cropped to the visible content with a 1.5-point safety
 margin for vector-backend font metrics. Cropping does not rescale fonts or the plot;
 PDF and SVG retain vector graphics.
@@ -50,9 +52,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import to_rgba
 from matplotlib.font_manager import FontProperties, findfont
+from matplotlib.offsetbox import AnnotationBbox, HPacker, TextArea
 from matplotlib.text import Text
 from matplotlib.ticker import PercentFormatter
-from matplotlib.transforms import Affine2D, Bbox
+from matplotlib.transforms import Bbox
 
 
 HERE = Path(__file__).resolve().parent
@@ -61,15 +64,15 @@ BASELINE_F1 = Decimal("0.668")
 BAR_COLOR = "#AA4499"
 FILL_ALPHA = 0.75
 GROUP_FONT = "Times New Roman"
-GROUP_DIVIDER = 8.0
-X_POSITIONS = (0.0, 2.09, 3.86, 6.35, 8.99, 10.84, 12.69)
-DEFAULT_WIDTH = 16.15
-DEFAULT_HEIGHT = 8.8
+DEFAULT_WIDTH = 36.8
+DEFAULT_HEIGHT = 6.6
 DEFAULT_FONT_SIZE = 28.0
 EXPORT_PAD_PT = 1.5
-LABEL_PAD = 7
-LABEL_ROTATION = 45
-CATEGORY_LINE_SPACING = 0.95
+BAR_WIDTH_INCHES = 0.5
+LABEL_BASELINE_PAD_PT = 20
+PARENTHETICAL_REDUCTION_PT = 2
+CATEGORY_EDGE_PAD_INCHES = 0.2
+MIN_CATEGORY_GAP_INCHES = 0.35
 AXIS_TITLE_LINE_SPACING = 1.0
 
 
@@ -79,6 +82,7 @@ class Ablation:
     label: str
     source_label: str
     f1: Decimal
+    qualifier: str = ""
 
     @property
     def relative_change_pct(self) -> Decimal:
@@ -86,21 +90,30 @@ class Ablation:
 
 
 ABLATIONS = (
-    Ablation("RL", "Heuristic\n(no RL)",
-             "No RL: Shapley ordering + 80% confidence exit", Decimal("0.6443")),
-    Ablation("RL", "No Q-prior\n" + r"($Q_0=0$)",
-             "v(s) zero-initialized", Decimal("0.6173")),
-    Ablation("RL", r"$[\mathbf{1}_{S_s}\Vert\mathbf{1}_{\mathcal{A}}]$ only" + "\n(state)",
-             "RL state: masks only", Decimal("0.6447")),
-    Ablation("RL", r"$p_s$ only" + "\n(state)",
-             "RL state: p_s derivatives only", Decimal("0.6651")),
-    Ablation("Backbone", "Fixed-order\ntraining",
+    Ablation("RL", "Heuristic",
+             "No RL: Shapley ordering + 80% confidence exit", Decimal("0.6443"), "(no RL)"),
+    Ablation("RL", "No Q-prior",
+             "v(s) zero-initialized", Decimal("0.6173"), r"($Q_0=0$)"),
+    Ablation("RL", r"$[\mathbf{1}_{S_s}\Vert\mathbf{1}_{\mathcal{A}}]$ only",
+             "RL state: masks only", Decimal("0.6447"), "(state)"),
+    Ablation("RL", r"$p_s$ only",
+             "RL state: p_s derivatives only", Decimal("0.6651"), "(state)"),
+    Ablation("Backbone", "Fixed-order training",
              "No random-order training", Decimal("0.6406")),
-    Ablation("Backbone", "Bottleneck\nsuffix",
+    Ablation("Backbone", "Bottleneck suffix",
              "Bottleneck position", Decimal("0.6463")),
-    Ablation("Backbone", "Final-prefix\nCE only",
+    Ablation("Backbone", "Final-prefix CE only",
              "Only CE loss", Decimal("0.6491")),
 )
+
+
+class InlineCategoryLabel(AnnotationBbox):
+    """Anchor mixed-size text to one baseline across raster/vector backends."""
+
+    def update_positions(self, renderer):
+        box = self.offsetbox.get_bbox(renderer)
+        self.xybox = (0, LABEL_BASELINE_PAD_PT + box.y0 / renderer.points_to_pixels(1))
+        super().update_positions(renderer)
 
 
 def parse_args() -> argparse.Namespace:
@@ -151,9 +164,35 @@ def build_figure(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, font_size=DEFAULT_F
         "figure.facecolor": "white", "savefig.facecolor": "white",
     })
     fig, ax = plt.subplots(figsize=(width, height))
-    x = X_POSITIONS
+    fig.subplots_adjust(left=2.55 / width, right=1 - 0.35 / width,
+                        bottom=0.2 / height, top=1 - 1.1 / height)
+    # A horizontal data unit is one physical inch, so widening the plot does
+    # not accidentally widen the bars. Labels retain their native point sizes.
+    axes_width = ax.get_position().width * width
+    ax.set_xlim(0, axes_width)
+    renderer = fig.canvas.get_renderer()
+    label_boxes = []
+    for row in ABLATIONS:
+        parts = [TextArea(row.label, textprops={"fontsize": font_size + 8})]
+        if row.qualifier:
+            parts.append(TextArea(row.qualifier, textprops={
+                "fontsize": font_size + 8 - PARENTHETICAL_REDUCTION_PT}))
+        packed = HPacker(children=parts, align="baseline", pad=0, sep=7)
+        packed.set_figure(fig)
+        label_boxes.append(packed)
+    label_widths = [box.get_bbox(renderer).width / fig.dpi for box in label_boxes]
+    gap = (axes_width - sum(label_widths) - 2 * CATEGORY_EDGE_PAD_INCHES) / 6
+    if gap < MIN_CATEGORY_GAP_INCHES:
+        plt.close(fig)
+        raise ValueError("The one-row labels need more width; increase --width-inches")
+    x = []
+    cursor = CATEGORY_EDGE_PAD_INCHES
+    for label_width in label_widths:
+        x.append(cursor + label_width / 2)
+        cursor += label_width + gap
+    group_divider = x[3] + label_widths[3] / 2 + gap / 2
     values = [float(row.relative_change_pct) for row in ABLATIONS]
-    bars = ax.bar(x, values, width=1.0,
+    bars = ax.bar(x, values, width=BAR_WIDTH_INCHES,
                   color=to_rgba(BAR_COLOR, FILL_ALPHA),
                   edgecolor="black", linewidth=0.65, zorder=3)
     for xi, value, row in zip(x, values, ABLATIONS):
@@ -165,9 +204,9 @@ def build_figure(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, font_size=DEFAULT_F
                     bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.92,
                           "pad": 0.3})
 
-    ax.set_xlim(-1.23, 14.7)
     ax.set_ylim(-9.25, 0)
-    ax.set_xticks(x, [row.label for row in ABLATIONS])
+    ax.set_xticks(x)
+    ax.set_xticklabels([""] * len(x))
     ax.set_yticks([-8, -6, -4, -2, 0])
     ax.yaxis.set_major_formatter(PercentFormatter(xmax=100, decimals=0))
     ax.set_ylabel("Relative Macro-F1\nchange (%)", labelpad=6,
@@ -176,65 +215,28 @@ def build_figure(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, font_size=DEFAULT_F
     ax.set_axisbelow(True)
     ax.xaxis.tick_top()
     ax.xaxis.set_label_position("top")
-    ax.tick_params(axis="x", length=0, pad=LABEL_PAD, top=True, labeltop=True,
+    ax.tick_params(axis="x", length=0, top=False, labeltop=False,
                    bottom=False, labelbottom=False)
     ax.tick_params(axis="y", direction="out", length=3, width=0.65, pad=3)
-    for label in ax.get_xticklabels():
-        label.set_linespacing(CATEGORY_LINE_SPACING)
-        label.set_rotation(LABEL_ROTATION)
-        label.set_rotation_mode("anchor")
-        label.set_ha("left")
-        label.set_va("bottom")
-        label.set_multialignment("left")
+    for xi, packed in zip(x, label_boxes):
+        label = InlineCategoryLabel(
+            packed, (xi, 1), xycoords=ax.get_xaxis_transform(),
+            xybox=(0, LABEL_BASELINE_PAD_PT), boxcoords="offset points",
+            box_alignment=(0.5, 0), frameon=False, pad=0,
+            annotation_clip=False)
+        ax.add_artist(label)
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color("black")
         spine.set_linewidth(0.8)
 
     # Both sections use the same metric color; names and the divider identify them.
-    ax.axvline(GROUP_DIVIDER, color="black", linestyle=":", linewidth=1.0, zorder=2)
-    for right_edge, group in ((7.65, "ARC"), (13.15, "SeMA")):
+    ax.axvline(group_divider, color="black", linestyle=":", linewidth=1.0, zorder=2)
+    for right_edge, group in ((group_divider - 0.4, "ARC"), (axes_width - 0.4, "SeMA")):
         ax.text(right_edge, 0.07, group, transform=ax.get_xaxis_transform(),
                 ha="right", va="bottom", fontsize=font_size - 0.5,
                 fontfamily=GROUP_FONT, color="black")
-    fig.subplots_adjust(left=2.55 / width, right=1 - 0.35 / width,
-                        bottom=0.2 / height, top=1 - 3.3 / height)
     return fig, ax, bars
-
-
-def text_outline(text, renderer):
-    """Return the actual rotated text rectangle, not its axis-aligned envelope."""
-    rotation = text.get_rotation()
-    if rotation % 90 == 0:
-        box = text.get_window_extent(renderer)
-        return [(box.x0, box.y0), (box.x1, box.y0),
-                (box.x1, box.y1), (box.x0, box.y1)]
-    if text.get_rotation_mode() != "anchor":
-        raise ValueError("Tilted labels must rotate around their text anchor")
-    try:
-        text.set_rotation(0)
-        box = text.get_window_extent(renderer)
-    finally:
-        text.set_rotation(rotation)
-    anchor = text.get_transform().transform(text.get_unitless_position())
-    return Affine2D().rotate_deg_around(*anchor, rotation).transform(
-        [(box.x0, box.y0), (box.x1, box.y0),
-         (box.x1, box.y1), (box.x0, box.y1)]
-    )
-
-
-def outlines_overlap(first, second):
-    """Separating-axis test avoids false collisions between tilted labels."""
-    for polygon in (first, second):
-        for index, start in enumerate(polygon):
-            end = polygon[(index + 1) % len(polygon)]
-            normal = (start[1] - end[1], end[0] - start[0])
-            projections = [[x * normal[0] + y * normal[1] for x, y in shape]
-                           for shape in (first, second)]
-            left, right = projections
-            if max(left) <= min(right) or max(right) <= min(left):
-                return False
-    return True
 
 
 def validate_figure(fig, ax, bars, font_size=DEFAULT_FONT_SIZE) -> None:
@@ -255,25 +257,29 @@ def validate_figure(fig, ax, bars, font_size=DEFAULT_FONT_SIZE) -> None:
     for label in group_labels:
         if label.get_bbox_patch() is not None or label.get_fontfamily() != [GROUP_FONT]:
             raise ValueError("Section labels must use unboxed Times New Roman")
-    if len(ax.lines) != 1 or ax.lines[0].get_linestyle() != ":" or any(
-        x != GROUP_DIVIDER for x in ax.lines[0].get_xdata()
-    ):
+    centers = [bar.get_x() + bar.get_width() / 2 for bar in bars]
+    if (len(ax.lines) != 1 or ax.lines[0].get_linestyle() != ":"
+            or not centers[3] < ax.lines[0].get_xdata()[0] < centers[4]):
         raise ValueError("Expected one dotted divider between the ablation groups")
-    if any(tick.label1.get_visible() or not tick.label2.get_visible()
+    if any(tick.label1.get_visible() or tick.label2.get_visible()
            for tick in ax.xaxis.get_major_ticks()):
-        raise ValueError("Category labels must appear only above the plot")
-    if [label.get_text() for label in ax.get_xticklabels()] != [row.label for row in ABLATIONS]:
-        raise ValueError("Category labels must preserve the requested text and order")
-    if any(tick.get_pad() != LABEL_PAD for tick in ax.xaxis.get_major_ticks()):
-        raise ValueError("Category labels must share one top level")
-    if any(label.get_rotation() != LABEL_ROTATION
-           or label.get_rotation_mode() != "anchor"
-           or label.get_ha() != "left" or label.get_va() != "bottom"
-           for label in ax.get_xticklabels()):
-        raise ValueError("Category labels must use the requested 45-degree tilt")
+        raise ValueError("Native category labels must be hidden behind the mixed-size labels")
+    category_labels = [artist for artist in ax.artists if isinstance(artist, InlineCategoryLabel)]
+    if len(category_labels) != 7:
+        raise ValueError("Expected exactly seven inline category labels")
+    for label, row in zip(category_labels, ABLATIONS):
+        text_areas = label.offsetbox.get_children()
+        expected = [row.label] + ([row.qualifier] if row.qualifier else [])
+        if [area.get_text() for area in text_areas] != expected:
+            raise ValueError("Category labels must preserve the requested text and order")
+        for index, area in enumerate(text_areas):
+            text = area.get_children()[0]
+            expected_size = font_size + 8 - (PARENTHETICAL_REDUCTION_PT if index else 0)
+            if text.get_fontsize() != expected_size or text.get_rotation() != 0 or "\n" in text.get_text():
+                raise ValueError("Category text must be horizontal, one-line, with smaller parentheticals")
     if ax.collections:
         raise ValueError("The compact layout must not retain staggered-label guides")
-    for label in (*ax.get_xticklabels(), *ax.get_yticklabels()):
+    for label in ax.get_yticklabels():
         if label.get_fontsize() != font_size + 8:
             raise ValueError("Tick labels have an unexpected font size")
     if ax.yaxis.label.get_fontsize() != font_size + 11.5:
@@ -282,6 +288,17 @@ def validate_figure(fig, ax, bars, font_size=DEFAULT_FONT_SIZE) -> None:
         raise ValueError("Value/group labels have an unexpected font size")
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
+    baseline = ax.bbox.y1 + renderer.points_to_pixels(LABEL_BASELINE_PAD_PT)
+    for label, center, bar in zip(category_labels, centers, bars):
+        box = label.get_window_extent(renderer)
+        raw_box = label.offsetbox.get_bbox(renderer)
+        if not np.isclose((box.x0 + box.x1) / 2, ax.transData.transform((center, 0))[0], atol=0.5):
+            raise ValueError("Each complete category label must be centered over its bar")
+        if not np.isclose(box.y0 - raw_box.y0, baseline, atol=0.5):
+            raise ValueError("All category labels must share one text baseline")
+        physical_width = bar.get_window_extent(renderer).width / fig.dpi
+        if not np.isclose(physical_width, BAR_WIDTH_INCHES):
+            raise ValueError("Bar widths must stay fixed in physical inches")
     # Enlarged endpoint labels must stay inside the plot, not erase its border.
     for label in ax.texts[:7]:
         box = label.get_window_extent(renderer)
@@ -290,19 +307,18 @@ def validate_figure(fig, ax, bars, font_size=DEFAULT_FONT_SIZE) -> None:
             raise ValueError(f"Endpoint label crosses the plot border: {label.get_text()!r}")
     texts = [text for text in fig.findobj(Text) if text.get_visible() and text.get_text()]
     boxes = [text.get_window_extent(renderer) for text in texts]
-    outlines = [text_outline(text, renderer) for text in texts]
     for text, box in zip(texts, boxes):
         if box.x0 < -0.5 or box.y0 < -0.5 or box.x1 > fig.bbox.width + 0.5 or box.y1 > fig.bbox.height + 0.5:
             raise ValueError(f"Clipped label {text.get_text()!r}; increase figure size")
-    for index, left in enumerate(outlines):
-        for other_index in range(index + 1, len(outlines)):
-            if outlines_overlap(left, outlines[other_index]):
+    for index, left in enumerate(boxes):
+        for other_index in range(index + 1, len(boxes)):
+            if left.overlaps(boxes[other_index]):
                 raise ValueError(f"Overlapping labels: {texts[index].get_text()!r}, "
                                  f"{texts[other_index].get_text()!r}")
 
 
 def tight_export_bbox(fig):
-    """Remove blank margins while including rotated glyphs and complete strokes.
+    """Remove blank margins while including complete glyphs and strokes.
 
     Measure rendered ink, not the extra font-descent space in text layout boxes.
     The vector exports use the same measured page boundary, not a raster image.

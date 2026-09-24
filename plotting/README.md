@@ -41,7 +41,8 @@ legend, have an additional 2 pt reduction; F1 annotations and other text are unc
 All main, inset, and legend marker
 sizes are increased by 16 pt (four 4 pt increases). The 18.6237-inch canvas width is
 held fixed so the size increase remains visible at a fixed manuscript width.
-The legend spans the full figure width in one row; its descriptions are
+The compact legend is centered above the panels in two rows (three methods
+followed by two), preserving method order across each row. Its descriptions are
 shortened to `(Monolithic)` and `(Selective)`, while `SeMARC (Ours)` is retained.
 The legend sits directly above the panels, and unused upper whitespace is
 cropped from the export. Enlarged F1 labels are staggered within the zoom panels, without
@@ -224,27 +225,28 @@ All bars use the paper's Macro-F1 purple (`#AA4499`). A dotted vertical divider
 separates ARC (RL) from SeMA (backbone); these group names appear as unboxed
 Times New Roman text inside the plot. Category labels sit above the plot.
 Times New Roman must be installed; the script rejects silent font substitution.
-All lettering is enlarged by another 4 pt: 36 pt x/y tick labels and a 39.5 pt
-axis label; values/group labels are 27.5 pt. The width remains 16.15 inches
-so the larger labels remain visibly larger when scaled to the same display width.
-Category labels now share one top level and tilt 45 degrees, without guide lines.
-The y-axis title wraps onto two lines. The working height is 8.8 inches and
-the top margin is 3.3 inches, fitting the enlarged text and full concatenated
-mask expression. Category spacing and outer margins accommodate the larger
-labels without shrinking them. Layout checks use rotated text
-rectangles to detect actual overlap; endpoint labels must stay inside the plot.
+Main category labels and y ticks retain 36 pt type; the y-axis title is 39.5 pt,
+and values/group labels remain 27.5 pt. Category parentheticals are 2 pt smaller
+(34 pt), inline rather than on a second line. All seven category labels are
+horizontal on a shared text baseline and centered over their corresponding bars.
+The working canvas is widened to 36.8 x 6.6 inches to fit the full single-line
+labels without reducing the main fonts; the y-axis title retains its two-line
+wrap and 1.0 line spacing. At a fixed manuscript display width, this wider
+figure will naturally scale down more than the earlier compact version.
+Label widths determine the category spacing. Bars have a fixed physical width
+of 0.5 inches, about 40% thinner than the previous 0.832-inch bars; increasing
+the canvas width does not widen them. Layout checks verify the common baseline,
+label/bar centering, smaller parentheticals, physical bar width, text bounds,
+and lack of overlap at both 100 and 600 dpi. Endpoint labels stay inside the plot.
 All three ablation exports crop to the rendered content with a 1.5-point
-safety margin for vector-font differences, removing the unused band above the
-rotated labels and the other blank outer margins. Cropping does not rescale
+safety margin for vector-font differences, removing blank outer margins.
+Cropping does not rescale
 fonts or the plot; the underlying scores are unchanged. PDF and SVG remain vector
 graphics and use the same crop as the PNG.
-Multiline category labels use tighter 0.95 line spacing (previously 1.15),
-and the wrapped y-axis title uses 1.0, preserving the latest wording.
 The labels, left to right, are Heuristic (no RL), No Q-prior
 ($Q_0=0$), $[\mathbf{1}_{S_s}\Vert\mathbf{1}_{\mathcal A}]$ only (state),
 $p_s$ only (state), Fixed-order training, Bottleneck suffix, and Final-prefix CE only.
-Both state-ablation labels put
-`(state)` on the second line. The original source descriptions
+The original source descriptions
 and full-precision measurements remain in the script. The figure retains black
 boundaries and no title or source footnote. The no-RL heuristic uses F1 = 0.6443,
 not the separate no-learned-stop row.
