@@ -1,0 +1,563 @@
+{
+  "input_file": "/Users/paymoh01/Downloads/iemocap_persample_shapley_all.csv",
+  "input_sha256": "1137459a285bd151dcfb5afd07d37d248167a056ffaeff2e50cbbb9e29556d0d",
+  "input_rows": 10500,
+  "input_groups": {
+    "random/avg/test/0": 909,
+    "random/avg/test/1": 793,
+    "random/avg/test/2": 1000,
+    "random/avg/val/0": 793,
+    "random/avg/val/1": 942,
+    "random/avg/val/2": 813,
+    "static/avg/test/0": 909,
+    "static/avg/test/1": 793,
+    "static/avg/test/2": 1000,
+    "static/avg/val/0": 793,
+    "static/avg/val/1": 942,
+    "static/avg/val/2": 813
+  },
+  "filter": {
+    "backbone": "random",
+    "vS": "avg",
+    "split": "test"
+  },
+  "selected_rows": 2702,
+  "class_counts": {
+    "neutral": 958,
+    "angry": 724,
+    "happy": 334,
+    "sad": 686
+  },
+  "fold_counts": {
+    "0": 909,
+    "1": 793,
+    "2": 1000
+  },
+  "unique_composite_keys": true,
+  "finite_complete_scores": true,
+  "class_labels_verified": true,
+  "pasted_sentinels_verified": 6,
+  "all_zero_rows_retained": 38,
+  "statistics": [
+    {
+      "class": "neutral",
+      "modality": "video",
+      "n": 958,
+      "pooled_mean": -0.042984759916492685,
+      "pooled_sample_sd_ddof1": 0.29894950074014925,
+      "minimum": -0.91667,
+      "maximum": 0.83333,
+      "fold_means": [
+        -0.0945386052631579,
+        0.09437620155038767,
+        -0.09251184374999995
+      ],
+      "equal_fold_mean": -0.03089141582092339,
+      "sd_of_fold_means_ddof0": 0.08858144618361756,
+      "previous_mean": -0.0309,
+      "previous_sd": 0.0886,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "neutral",
+      "modality": "audio",
+      "n": 958,
+      "pooled_mean": -0.060369279749478075,
+      "pooled_sample_sd_ddof1": 0.2028208220119213,
+      "minimum": -0.7975,
+      "maximum": 0.60819,
+      "fold_means": [
+        -0.08713349999999997,
+        -0.0652621705426356,
+        -0.02464187499999996
+      ],
+      "equal_fold_mean": -0.059012515180878515,
+      "sd_of_fold_means_ddof0": 0.025892012190258096,
+      "previous_mean": -0.059,
+      "previous_sd": 0.0259,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "neutral",
+      "modality": "text",
+      "n": 958,
+      "pooled_mean": 0.15136417536534447,
+      "pooled_sample_sd_ddof1": 0.4333417311337609,
+      "minimum": -0.95,
+      "maximum": 0.83333,
+      "fold_means": [
+        0.14917494736842102,
+        -0.034977286821705394,
+        0.30420168749999965
+      ],
+      "equal_fold_mean": 0.1394664493489051,
+      "sd_of_fold_means_ddof0": 0.1386393050468906,
+      "previous_mean": 0.1395,
+      "previous_sd": 0.1386,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "neutral",
+      "modality": "mocap_hand",
+      "n": 958,
+      "pooled_mean": -0.08193362212943632,
+      "pooled_sample_sd_ddof1": 0.16853812195113696,
+      "minimum": -0.53056,
+      "maximum": 0.51556,
+      "fold_means": [
+        0.021463131578947373,
+        -0.05278096899224808,
+        -0.22822159375000012
+      ],
+      "equal_fold_mean": -0.08651314372110026,
+      "sd_of_fold_means_ddof0": 0.10468686713114608,
+      "previous_mean": -0.0865,
+      "previous_sd": 0.1047,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "neutral",
+      "modality": "mocap_head",
+      "n": 958,
+      "pooled_mean": -0.09894022964509394,
+      "pooled_sample_sd_ddof1": 0.13106046802982962,
+      "minimum": -0.55667,
+      "maximum": 0.30083,
+      "fold_means": [
+        -0.040951026315789466,
+        -0.10800124031007742,
+        -0.16049696875000014
+      ],
+      "equal_fold_mean": -0.103149745125289,
+      "sd_of_fold_means_ddof0": 0.048924846055059604,
+      "previous_mean": -0.1031,
+      "previous_sd": 0.0489,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "neutral",
+      "modality": "mocap_rotated",
+      "n": 958,
+      "pooled_mean": -0.15659995824634657,
+      "pooled_sample_sd_ddof1": 0.10836904699643578,
+      "minimum": -0.68542,
+      "maximum": 0.22847,
+      "fold_means": [
+        -0.1662057368421053,
+        -0.22200744186046534,
+        -0.09245831249999999
+      ],
+      "equal_fold_mean": -0.1602238304008569,
+      "sd_of_fold_means_ddof0": 0.05305708644480668,
+      "previous_mean": -0.1602,
+      "previous_sd": 0.0531,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "angry",
+      "modality": "video",
+      "n": 724,
+      "pooled_mean": 0.04803741712707182,
+      "pooled_sample_sd_ddof1": 0.22232431856534807,
+      "minimum": -0.60972,
+      "maximum": 0.98056,
+      "fold_means": [
+        -0.05704789808917196,
+        0.06860100917431192,
+        0.08876283333333328
+      ],
+      "equal_fold_mean": 0.03343864813949108,
+      "sd_of_fold_means_ddof0": 0.06451090902397208,
+      "previous_mean": 0.0334,
+      "previous_sd": 0.0645,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "angry",
+      "modality": "audio",
+      "n": 724,
+      "pooled_mean": 0.29382013812154695,
+      "pooled_sample_sd_ddof1": 0.2614875006244661,
+      "minimum": -0.55556,
+      "maximum": 0.99861,
+      "fold_means": [
+        0.3303291719745223,
+        0.36354217125382265,
+        0.17494087499999986
+      ],
+      "equal_fold_mean": 0.2896040727427816,
+      "sd_of_fold_means_ddof0": 0.08220507899042047,
+      "previous_mean": 0.2896,
+      "previous_sd": 0.0822,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "angry",
+      "modality": "text",
+      "n": 724,
+      "pooled_mean": 0.2861000966850829,
+      "pooled_sample_sd_ddof1": 0.41115110166810354,
+      "minimum": -0.75,
+      "maximum": 1.0,
+      "fold_means": [
+        0.20580681528662426,
+        0.3623625993883795,
+        0.23471762499999985
+      ],
+      "equal_fold_mean": 0.2676290132250012,
+      "sd_of_fold_means_ddof0": 0.0680186150505944,
+      "previous_mean": 0.2676,
+      "previous_sd": 0.068,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "angry",
+      "modality": "mocap_hand",
+      "n": 724,
+      "pooled_mean": 0.014710138121546961,
+      "pooled_sample_sd_ddof1": 0.12121301781895201,
+      "minimum": -0.39833,
+      "maximum": 0.50806,
+      "fold_means": [
+        0.12646420382165605,
+        -0.049457737003058104,
+        0.029033083333333327
+      ],
+      "equal_fold_mean": 0.03534651671731042,
+      "sd_of_fold_means_ddof0": 0.07195844586381779,
+      "previous_mean": 0.0353,
+      "previous_sd": 0.072,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "angry",
+      "modality": "mocap_head",
+      "n": 724,
+      "pooled_mean": 0.09910531767955802,
+      "pooled_sample_sd_ddof1": 0.14386084162292992,
+      "minimum": -0.41171,
+      "maximum": 0.52764,
+      "fold_means": [
+        0.06448420382165607,
+        0.11237516819571862,
+        0.10367312500000003
+      ],
+      "equal_fold_mean": 0.0935108323391249,
+      "sd_of_fold_means_ddof0": 0.020830110597616285,
+      "previous_mean": 0.0935,
+      "previous_sd": 0.0208,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "angry",
+      "modality": "mocap_rotated",
+      "n": 724,
+      "pooled_mean": 0.009821243093922651,
+      "pooled_sample_sd_ddof1": 0.08012326134234965,
+      "minimum": -0.31097,
+      "maximum": 0.46806,
+      "fold_means": [
+        -0.033279554140127385,
+        0.021960336391437307,
+        0.021476833333333348
+      ],
+      "equal_fold_mean": 0.0033858718615477567,
+      "sd_of_fold_means_ddof0": 0.025927122757388458,
+      "previous_mean": 0.0034,
+      "previous_sd": 0.0259,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "happy",
+      "modality": "video",
+      "n": 334,
+      "pooled_mean": 0.08671263473053892,
+      "pooled_sample_sd_ddof1": 0.26082786642102884,
+      "minimum": -0.56972,
+      "maximum": 0.88194,
+      "fold_means": [
+        0.09014738805970154,
+        0.08974830769230771,
+        0.08184170370370372
+      ],
+      "equal_fold_mean": 0.08724579981857099,
+      "sd_of_fold_means_ddof0": 0.0038247446449797963,
+      "previous_mean": 0.0872,
+      "previous_sd": 0.0038,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "happy",
+      "modality": "audio",
+      "n": 334,
+      "pooled_mean": 0.03193392215568862,
+      "pooled_sample_sd_ddof1": 0.12494582740801152,
+      "minimum": -0.29458,
+      "maximum": 0.3862,
+      "fold_means": [
+        0.07756895522388062,
+        -0.006666307692307692,
+        0.00522222222222222
+      ],
+      "equal_fold_mean": 0.025374956584598384,
+      "sd_of_fold_means_ddof0": 0.03722449378523246,
+      "previous_mean": 0.0254,
+      "previous_sd": 0.0372,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "happy",
+      "modality": "text",
+      "n": 334,
+      "pooled_mean": 0.19132452095808383,
+      "pooled_sample_sd_ddof1": 0.47534356127275307,
+      "minimum": -0.7,
+      "maximum": 1.0,
+      "fold_means": [
+        0.04560664179104477,
+        0.45828646153846164,
+        0.20742577777777782
+      ],
+      "equal_fold_mean": 0.23710629370242808,
+      "sd_of_fold_means_ddof0": 0.16977800834394538,
+      "previous_mean": 0.2371,
+      "previous_sd": 0.1698,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "happy",
+      "modality": "mocap_hand",
+      "n": 334,
+      "pooled_mean": -0.048850718562874255,
+      "pooled_sample_sd_ddof1": 0.08950840890300185,
+      "minimum": -0.38708,
+      "maximum": 0.30208,
+      "fold_means": [
+        -0.09705880597014924,
+        -0.022181538461538464,
+        -0.013840444444444445
+      ],
+      "equal_fold_mean": -0.04436026295871071,
+      "sd_of_fold_means_ddof0": 0.037418763466090355,
+      "previous_mean": -0.0444,
+      "previous_sd": 0.0374,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "happy",
+      "modality": "mocap_head",
+      "n": 334,
+      "pooled_mean": 0.040268862275449104,
+      "pooled_sample_sd_ddof1": 0.09934011333001093,
+      "minimum": -0.18333,
+      "maximum": 0.5625,
+      "fold_means": [
+        0.03701291044776118,
+        0.0948830769230769,
+        0.01720496296296296
+      ],
+      "equal_fold_mean": 0.04970031677793368,
+      "sd_of_fold_means_ddof0": 0.03295653760778771,
+      "previous_mean": 0.0497,
+      "previous_sd": 0.033,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "happy",
+      "modality": "mocap_rotated",
+      "n": 334,
+      "pooled_mean": 0.2344184131736527,
+      "pooled_sample_sd_ddof1": 0.2922610417207272,
+      "minimum": -0.57579,
+      "maximum": 1.0,
+      "fold_means": [
+        0.33986067164179085,
+        0.02157246153846154,
+        0.23223859259259264
+      ],
+      "equal_fold_mean": 0.197890575257615,
+      "sd_of_fold_means_ddof0": 0.13219098782652372,
+      "previous_mean": 0.1979,
+      "previous_sd": 0.1322,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "sad",
+      "modality": "video",
+      "n": 686,
+      "pooled_mean": -0.04175483965014577,
+      "pooled_sample_sd_ddof1": 0.270980049606728,
+      "minimum": -0.83333,
+      "maximum": 0.91463,
+      "fold_means": [
+        0.1163512605042017,
+        -0.2959172027972028,
+        -0.04596478688524592
+      ],
+      "equal_fold_mean": -0.07517690972608233,
+      "sd_of_fold_means_ddof0": 0.16957069823307025,
+      "previous_mean": -0.0752,
+      "previous_sd": 0.1696,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "sad",
+      "modality": "audio",
+      "n": 686,
+      "pooled_mean": 0.26574231778425655,
+      "pooled_sample_sd_ddof1": 0.2185840913866349,
+      "minimum": -0.43472,
+      "maximum": 0.96667,
+      "fold_means": [
+        0.28339533613445383,
+        0.14693671328671332,
+        0.30766947540983625
+      ],
+      "equal_fold_mean": 0.24600050827700115,
+      "sd_of_fold_means_ddof0": 0.07074618985169683,
+      "previous_mean": 0.246,
+      "previous_sd": 0.0707,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "sad",
+      "modality": "text",
+      "n": 686,
+      "pooled_mean": 0.1934715889212828,
+      "pooled_sample_sd_ddof1": 0.4162201873415204,
+      "minimum": -0.8,
+      "maximum": 1.0,
+      "fold_means": [
+        0.2620584873949581,
+        0.3251206293706295,
+        0.07822734426229504
+      ],
+      "equal_fold_mean": 0.22180215367596087,
+      "sd_of_fold_means_ddof0": 0.10473618560067254,
+      "previous_mean": 0.2218,
+      "previous_sd": 0.1047,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "sad",
+      "modality": "mocap_hand",
+      "n": 686,
+      "pooled_mean": 0.08968632653061226,
+      "pooled_sample_sd_ddof1": 0.17888623190255903,
+      "minimum": -0.54282,
+      "maximum": 0.54889,
+      "fold_means": [
+        -0.10406701680672266,
+        0.18377790209790212,
+        0.19676239344262303
+      ],
+      "equal_fold_mean": 0.09215775957793416,
+      "sd_of_fold_means_ddof0": 0.1388530912014006,
+      "previous_mean": 0.0922,
+      "previous_sd": 0.1389,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "sad",
+      "modality": "mocap_head",
+      "n": 686,
+      "pooled_mean": 0.08626256559766764,
+      "pooled_sample_sd_ddof1": 0.16298902049396846,
+      "minimum": -0.49167,
+      "maximum": 0.52319,
+      "fold_means": [
+        0.07887159663865545,
+        -0.021100839160839158,
+        0.14236754098360654
+      ],
+      "equal_fold_mean": 0.06671276615380761,
+      "sd_of_fold_means_ddof0": 0.06728722363040253,
+      "previous_mean": 0.0667,
+      "previous_sd": 0.0673,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    },
+    {
+      "class": "sad",
+      "modality": "mocap_rotated",
+      "n": 686,
+      "pooled_mean": 0.11355723032069971,
+      "pooled_sample_sd_ddof1": 0.14557852565598983,
+      "minimum": -0.65417,
+      "maximum": 0.44556,
+      "fold_means": [
+        0.1480369327731093,
+        0.17760741258741267,
+        0.056621672131147494
+      ],
+      "equal_fold_mean": 0.1274220058305565,
+      "sd_of_fold_means_ddof0": 0.05149834144949254,
+      "previous_mean": 0.1274,
+      "previous_sd": 0.0515,
+      "previous_mean_matches_equal_fold_mean_4dp": true,
+      "previous_sd_matches_fold_sd_4dp": true
+    }
+  ],
+  "caption": "Sample-wise modality Shapley contributions for the random-order backbone (vS=avg) on the IEMOCAP test split, pooled across three test folds. Each dot is one supplied attribution. Both horizontal position and color encode signed Shapley contribution, using Paul Tol's colorblind-friendly sunset diverging palette: blue for negative values, pale cream at zero, and orange/red for positive values, with a shared scale from -1 to +1. Position and the zero-reference line provide a color-independent sign cue. Color does not encode input feature values or sample density. No mean markers or SD whiskers are shown. Binned vertical stacks are scaled separately per row, so their heights are not comparable sample counts; all x values are unaltered. MoCap1, MoCap2, and MoCap3 denote hand, head, and rotated, respectively.",
+  "style": "gradient",
+  "appearance": {
+    "font_size_pt": 24,
+    "figure_size_inches": [
+      8.0,
+      4.4
+    ],
+    "marker_size_pt_squared": 9.0,
+    "marker_edge_color": "none",
+    "marker_edge_width_pt": 0
+  },
+  "color_encoding": {
+    "quantity": "signed Shapley contribution",
+    "palette": "Paul Tol sunset",
+    "palette_source": "https://sronpersonalpages.nl/~pault/",
+    "limits": [
+      -1,
+      1
+    ],
+    "center": 0,
+    "colors": [
+      "#364B9A",
+      "#4A7BB7",
+      "#6EA6CD",
+      "#98CAE1",
+      "#C2E4EF",
+      "#EAECCC",
+      "#FEDA8B",
+      "#FDB366",
+      "#F67E4B",
+      "#DD3D2D",
+      "#A50026"
+    ],
+    "alpha": 1.0,
+    "shared_across_all_panels": true,
+    "color_independent_sign_cue": "x position and zero line",
+    "mean_sd_overlay": false
+  },
+  "filtered_data_sha256": "55d5f09698ed395d29797aeec14cc12e60d2a973eb9b0064d7905dee679b26b6"
+}

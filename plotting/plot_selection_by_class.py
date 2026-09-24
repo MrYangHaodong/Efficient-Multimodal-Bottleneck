@@ -9,6 +9,13 @@ order are unchanged; the figures show means, not uncertainty estimates.
 No figure title or outer frame is added. PDF fonts are embedded, and PNGs are
 saved at 600 dpi. Dimensions and font sizes are in inches and points, so they
 can be set for the final manuscript placement without rescaling the fonts.
+The IEMOCAP heatmap defaults to 14 pt ticks and 15 pt axis/colorbar titles
+(a 4 pt increase); other datasets and bar plots retain their 10 pt base.
+An explicit --font-size overrides these defaults.
+The IEMOCAP heatmap uses an exact 4.5 x 3.2 inch export (2700 x 1920 at
+600 dpi). Together with the 6.0 x 3.2 inch cascade and 4.5 x 3.2 inch
+modality-weighting figure, it has the same displayed height in a 30% / 40% / 30%
+manuscript row. Other datasets keep their existing dimensions.
 
   python plotting/plot_selection_by_class.py
   python plotting/plot_selection_by_class.py --datasets iemocap --annotate
@@ -31,6 +38,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import StrMethodFormatter
+from matplotlib.text import Text
 
 HERE = Path(__file__).resolve().parent
 ALL = ['iemocap', 'mmfi', 'cmi', 'czu_mhad', 'dsads', 'eav', 'utd_mhad']
@@ -60,6 +68,12 @@ MODALITY_COLORS = {
 }
 CMAP = LinearSegmentedColormap.from_list(
     'semarc_probability', ['#FFFFFF', '#EAD6E7', PURPLE, '#602658'])
+
+
+def resolve_font_size(ds, form, font_size):
+    if font_size is not None:
+        return font_size
+    return 14.0 if ds == 'iemocap' and form == 'heatmap' else 10.0
 
 
 def apply_style(font_size=10.0):
@@ -111,16 +125,32 @@ def _out(ds, form, auto, output_dir=None):
     return directory / (f'selection_by_class_{ds}' + ('' if form == auto else f'_{form}'))
 
 
-def save(fig, out, dpi=600):
+def save(fig, out, dpi=600, *, fixed_canvas=False):
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.canvas.draw()
+    if fixed_canvas:
+        for resolution in (100, dpi):
+            fig.set_dpi(resolution)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            for text in fig.findobj(Text):
+                if not text.get_visible() or not text.get_text():
+                    continue
+                box = text.get_window_extent(renderer)
+                if (box.x0 < -0.5 or box.y0 < -0.5 or
+                        box.x1 > fig.bbox.width + 0.5 or box.y1 > fig.bbox.height + 0.5):
+                    raise ValueError(f'Clipped label {text.get_text()!r}; increase figure size.')
+    else:
+        fig.canvas.draw()
     for ext in ('pdf', 'png'):
-        fig.savefig(f'{out}.{ext}', dpi=dpi, bbox_inches='tight', pad_inches=0.035)
+        fig.savefig(f'{out}.{ext}', dpi=dpi,
+                    bbox_inches=None if fixed_canvas else 'tight',
+                    pad_inches=0 if fixed_canvas else 0.035)
     plt.close(fig)
 
 
-def bars(ds, auto='heatmap', *, output_dir=None, font_size=10.0,
+def bars(ds, auto='heatmap', *, output_dir=None, font_size=None,
          width=None, height=None, dpi=600, annotate=False):
+    font_size = resolve_font_size(ds, 'bars', font_size)
     apply_style(font_size)
     mods, P, k, names = load(ds)
     C, M = P.shape
@@ -156,18 +186,24 @@ def bars(ds, auto='heatmap', *, output_dir=None, font_size=10.0,
     print(f'  {ds:9s} bars     C={C} M={M}  mean |S| {k.min():.2f}-{k.max():.2f}  -> {out}.pdf')
 
 
-def heatmap(ds, auto='heatmap', *, output_dir=None, font_size=10.0,
+def heatmap(ds, auto='heatmap', *, output_dir=None, font_size=None,
             width=None, height=None, dpi=600, annotate=False):
+    font_size = resolve_font_size(ds, 'heatmap', font_size)
     apply_style(font_size)
     mods, P, k, names = load(ds)
     C, M = P.shape
     # Keep dense class labels readable at their native print size.
     row_height = max(0.17, 1.4 * font_size / 72)
+    row_matched = ds == 'iemocap'
+    default_width = 4.5 if row_matched else max(3.6, 0.40 * M + 1.4)
+    default_height = 3.2 if row_matched else max(2.0, row_height * C + 0.82)
     fig, (ax, cax) = plt.subplots(
-        1, 2, figsize=(width or max(3.6, 0.40 * M + 1.4),
-                       height or max(2.0, row_height * C + 0.82)),
+        1, 2, figsize=(width or default_width, height or default_height),
         gridspec_kw=dict(width_ratios=[M, 0.16]), layout='constrained')
-    fig.set_constrained_layout_pads(w_pad=0.025, h_pad=0.025, wspace=0.035, hspace=0.02)
+    fig.set_constrained_layout_pads(
+        w_pad=0.005 if row_matched else 0.025,
+        h_pad=0.005 if row_matched else 0.025,
+        wspace=0.025 if row_matched else 0.035, hspace=0.02)
     im = ax.imshow(P, aspect='auto', cmap=CMAP, vmin=0, vmax=1, interpolation='nearest')
     ax.set_xticks(range(M))
     ax.set_xticklabels([PRETTY.get(m, m) for m in mods], rotation=38,
@@ -194,7 +230,10 @@ def heatmap(ds, auto='heatmap', *, output_dir=None, font_size=10.0,
     cb.outline.set_linewidth(0.8)
     cb.outline.set_edgecolor('black')
     out = _out(ds, 'heatmap', auto, output_dir)
-    save(fig, out, dpi)
+    np.testing.assert_array_equal(im.get_array(), P)
+    if im.get_clim() != (0, 1):
+        raise ValueError('The probability color scale must remain [0, 1].')
+    save(fig, out, dpi, fixed_canvas=row_matched)
     print(f'  {ds:9s} heatmap  C={C} M={M}  mean |S| {k.min():.2f}-{k.max():.2f}  -> {out}.pdf')
 
 
@@ -203,7 +242,8 @@ def main():
     ap.add_argument('--datasets', nargs='+', choices=ALL, default=ALL)
     ap.add_argument('--form', choices=['auto', 'bars', 'heatmap'], default='auto')
     ap.add_argument('--output-dir', type=Path, default=HERE)
-    ap.add_argument('--font-size', type=float, default=10.0, help='Base font size in points.')
+    ap.add_argument('--font-size', type=float, default=None,
+                    help='Base font size in points (default: 14 for the IEMOCAP heatmap; 10 otherwise).')
     ap.add_argument('--width-inches', type=float, default=None)
     ap.add_argument('--height-inches', type=float, default=None)
     ap.add_argument('--dpi', type=int, default=600)
@@ -213,7 +253,7 @@ def main():
         value = getattr(a, name)
         if value is not None and (not np.isfinite(value) or value <= 0):
             ap.error(f'--{name.replace("_", "-")} must be finite and positive')
-    if a.font_size <= 1:
+    if a.font_size is not None and a.font_size <= 1:
         ap.error('--font-size must exceed 1 point')
     for ds in a.datasets:
         auto = 'heatmap'      # the form the paper uses for every dataset

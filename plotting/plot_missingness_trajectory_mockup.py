@@ -102,13 +102,25 @@ def shaded(color, fraction):
     return tuple((1 - fraction) + fraction * np.array(mcolors.to_rgb(color)))
 
 
+def segment_midpoint(values, index):
+    """Anchor a label between observations on the displayed log-x trajectory.
+
+    This is annotation geometry only, not an additional missingness measurement.
+    The geometric mean of x and arithmetic mean of y give the visual midpoint
+    of the straight segment on log-x, linear-y axes.
+    """
+    x0, x1 = values["gflops"][index:index + 2]
+    y0, y1 = values["f1"][index:index + 2]
+    return float(np.sqrt(x0 * x1)), (y0 + y1) / 2
+
+
 def render(data, output_dir: Path, stem: str):
     plt.rcParams.update({
         "font.family": "DejaVu Sans",
-        "font.size": 18.5,
-        "axes.labelsize": 24,
-        "xtick.labelsize": 18,
-        "ytick.labelsize": 18,
+        "font.size": 22.5,
+        "axes.labelsize": 28,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
         "axes.linewidth": 1.0,
         "axes.edgecolor": "black",
         "pdf.fonttype": 42,
@@ -127,8 +139,8 @@ def render(data, output_dir: Path, stem: str):
     ax.yaxis.set_major_locator(FixedLocator(np.arange(.35, .71, .05)))
     ax.grid(color="#E5E7E9", linewidth=.65)
     ax.set_axisbelow(True)
-    ax.set_xlabel("GFLOPs per inference (log scale)  ·  lower is better", labelpad=7)
-    ax.set_ylabel("Macro-F1  ·  higher is better", labelpad=7)
+    ax.set_xlabel("GFLOPs per inference (log scale)", labelpad=7)
+    ax.set_ylabel("Macro-F1", labelpad=7)
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color("black")
@@ -155,19 +167,20 @@ def render(data, output_dir: Path, stem: str):
                 zorder=zorder + 1,
             )
 
-    # Each label points to the named method, at its 0% or 40% observation.
+    # Leaders meet the interior of a same-method segment, never a data marker.
+    # The index identifies the first observation of the selected segment.
     labels = {
         "MBT": (0, (.50, .651)),
-        "MAESTRO": (4, (.275, .359)),
-        "ShaSpec": (0, (1.04, .638)),
-        "DecALign": (0, (8.0, .506)),
-        "MultiModN": (0, (.73, .607)),
-        "DyMo": (4, (.56, .463)),
-        "AdaMML": (4, (.251, .480)),
+        "MAESTRO": (3, (.275, .369)),
+        "ShaSpec": (0, (1.04, .656)),
+        "DecALign": (0, (7.1, .506)),
+        "MultiModN": (0, (.48, .609)),
+        "DyMo": (3, (.56, .463)),
+        "AdaMML": (3, (.251, .474)),
         "DyMM": (0, (2.04, .625)),
-        "Greedy Submodular": (4, (.091, .408)),
-        "JAFA": (4, (.087, .465)),
-        "MMEE": (4, (.51, .518)),
+        "Greedy Submodular": (3, (.091, .408)),
+        "JAFA": (3, (.087, .465)),
+        "MMEE": (3, (.392, .528)),
         "SeMARC w/o RL": (0, (.51, .699)),
         "SeMARC": (0, (.175, .711)),
     }
@@ -176,23 +189,34 @@ def render(data, output_dir: Path, stem: str):
         ours = name == "SeMARC"
         ablation = name == "SeMARC w/o RL"
         color = OURS_COLOR if ours else ABLATION_COLOR if ablation else "#454D53"
+        leader = {
+            "arrowstyle": "-", "color": color, "lw": .65,
+            "linestyle": (0, (3, 3)), "alpha": .65,
+            "shrinkA": 4, "shrinkB": 0,
+        }
+        if name in {"SeMARC", "Greedy Submodular", "JAFA"}:
+            # Enter from the side so the leader cannot look like a continuation
+            # of the trajectory or pass through its endpoint marker.
+            leader["connectionstyle"] = "angle,angleA=90,angleB=0,rad=0"
+        elif name in {"ShaSpec", "MultiModN", "DecALign"}:
+            leader["relpos"] = (0, 0)
         ax.annotate(
             DISPLAY_LABELS.get(name, name),
-            xy=(values["gflops"][index], values["f1"][index]),
-            xytext=destination, textcoords="data", fontsize=18 if not ours else 20,
+            xy=segment_midpoint(values, index),
+            xytext=destination, textcoords="data", fontsize=22 if not ours else 24,
             fontweight="bold" if ours else "normal", color=color,
-            ha="left", va="center",
-            arrowprops={"arrowstyle": "-", "color": color, "lw": .65, "shrinkB": 5},
+            ha="right" if name == "MMEE" else "left", va="center",
+            arrowprops=leader,
             zorder=20,
         )
 
     ours = data["SeMARC"]
-    rate_offsets = [(-12, 5), (-12, 5), (-12, 9), (-12, -4), (10, -5)]
+    rate_offsets = [(-12, 5), (-12, 5), (-12, 9), (-12, -4), (0, -19)]
     for i, rate in enumerate(MISSINGNESS):
         ax.annotate(
             f"{rate}%", xy=(ours["gflops"][i], ours["f1"][i]),
             xytext=rate_offsets[i], textcoords="offset points",
-            fontsize=17, ha="left" if i == 4 else "right",
+            fontsize=21, ha="left" if i == 4 else "right",
             va="center", color=OURS_COLOR, zorder=20,
         )
     ax.annotate(
@@ -212,11 +236,11 @@ def render(data, output_dir: Path, stem: str):
     legend = ax.legend(
         handles=handles, ncol=len(handles), frameon=True,
         fancybox=False, framealpha=1.0, facecolor="white", edgecolor="#B9B9B9",
-        loc="lower center", bbox_to_anchor=(.5, 1.013), fontsize=17.5,
+        loc="lower center", bbox_to_anchor=(.5, 1.013), fontsize=21.5,
         borderaxespad=0, borderpad=.25,
-        columnspacing=.85, handletextpad=.45, handlelength=1,
+        columnspacing=.50, handletextpad=.30, handlelength=.70,
     )
-    legend.get_texts()[0].set_fontsize(18)
+    legend.get_texts()[0].set_fontsize(22)
     legend.get_frame().set_linewidth(.6)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_paths = []

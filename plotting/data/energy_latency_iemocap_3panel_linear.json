@@ -1,0 +1,30 @@
+{
+  "dataset": "IEMOCAP",
+  "provenance": {
+    "purpose": "Frozen data for the font-only update to the existing IEMOCAP three-panel figure.",
+    "source_workbook": "https://docs.google.com/spreadsheets/d/1ZsKgZztYMPOj76LL7eYWT07JJ4k0cWdaC1zmOlIy3q0/export?format=xlsx",
+    "checked_date": "2026-09-24",
+    "reference_svg": "plotting/output/energy_latency_iemocap_3panel_linear.svg before the font update, generated 2026-09-20T14:05:01.948214",
+    "units": "Latency in seconds, energy in joules; source_row refers to Energy_Study.",
+    "gpu_semarc_preservation": "The live sheet had changed to 0.60106 s / 150.3196 J. The original plotted point was recovered from the saved SVG's linear axis calibration and rounded to source precision: 0.57684 s / 135.3428 J. All other displayed measurements match the refreshed workbook. F1 scores reproduce the original annotations.",
+    "verification": "Before changing fonts, these values exactly reproduced all 58 SVG text objects (text, position, style) and all 65 marker/tick objects (position, style) in the original figure. This is a preservation snapshot, not a new experiment."
+  },
+  "f1_scores": {"SeMARC": 0.668, "MBT": 0.636, "AdaMML": 0.595, "DyMM": 0.62, "DyMo": 0.558},
+  "measurements": [
+    {"platform": "GPU", "dataset": "IEMOCAP", "method": "SeMARC", "latency_s": 0.57684, "energy_j": 135.3428, "source_row": 5},
+    {"platform": "GPU", "dataset": "IEMOCAP", "method": "AdaMML", "latency_s": 1.5067000000000002, "energy_j": 356.6087, "source_row": 5},
+    {"platform": "GPU", "dataset": "IEMOCAP", "method": "DyMM", "latency_s": 1.51031, "energy_j": 357.769, "source_row": 5},
+    {"platform": "GPU", "dataset": "IEMOCAP", "method": "DyMo", "latency_s": 1.52628, "energy_j": 361.0935, "source_row": 5},
+    {"platform": "GPU", "dataset": "IEMOCAP", "method": "MBT", "latency_s": 1.46953, "energy_j": 381.382, "source_row": 5},
+    {"platform": "CPU", "dataset": "IEMOCAP", "method": "SeMARC", "latency_s": 5.884, "energy_j": 1457.4, "source_row": 16},
+    {"platform": "CPU", "dataset": "IEMOCAP", "method": "AdaMML", "latency_s": 14.687000000000001, "energy_j": 3693.6, "source_row": 16},
+    {"platform": "CPU", "dataset": "IEMOCAP", "method": "DyMM", "latency_s": 13.546000000000001, "energy_j": 3844.3, "source_row": 16},
+    {"platform": "CPU", "dataset": "IEMOCAP", "method": "DyMo", "latency_s": 14.618, "energy_j": 3856.8, "source_row": 16},
+    {"platform": "CPU", "dataset": "IEMOCAP", "method": "MBT", "latency_s": 14.618, "energy_j": 3844.3, "source_row": 16},
+    {"platform": "Android (INT8)", "dataset": "IEMOCAP", "method": "SeMARC", "latency_s": 16.1205, "energy_j": 90.2236, "source_row": 45},
+    {"platform": "Android (INT8)", "dataset": "IEMOCAP", "method": "AdaMML", "latency_s": 38.3605, "energy_j": 151.7619, "source_row": 45},
+    {"platform": "Android (INT8)", "dataset": "IEMOCAP", "method": "DyMM", "latency_s": 39.354, "energy_j": 169.985, "source_row": 45},
+    {"platform": "Android (INT8)", "dataset": "IEMOCAP", "method": "DyMo", "latency_s": 37.946, "energy_j": 180.071, "source_row": 45},
+    {"platform": "Android (INT8)", "dataset": "IEMOCAP", "method": "MBT", "latency_s": 38.229440000000004, "energy_j": 169.4042, "source_row": 45}
+  ]
+}

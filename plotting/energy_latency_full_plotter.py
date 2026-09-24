@@ -20,6 +20,7 @@ Dependencies: matplotlib, openpyxl
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 import urllib.request
@@ -138,6 +139,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--sheet", default="Energy_Study")
     parser.add_argument("--results-sheet", default="Main_ResultsFull")
+    parser.add_argument(
+        "--snapshot", type=Path, default=None,
+        help="Frozen measurement/F1 JSON for reproducible styling without refreshing the sheet.",
+    )
     parser.add_argument(
         "--dataset",
         default="IEMOCAP",
@@ -391,16 +396,16 @@ def publication_font(previous_size: float) -> float:
     return previous_size + FONT_SIZE_INCREMENT
 
 
-def configure_style() -> None:
+def configure_style(extra_font_points: float = 0.0) -> None:
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
-            "font.size": publication_font(11.0),
-            "axes.labelsize": publication_font(13.0),
-            "xtick.labelsize": publication_font(10.5),
-            "ytick.labelsize": publication_font(10.5),
-            "legend.fontsize": publication_font(9.5),
-            "figure.labelsize": publication_font(13.2),
+            "font.size": publication_font(11.0) + extra_font_points,
+            "axes.labelsize": publication_font(13.0) + extra_font_points,
+            "xtick.labelsize": publication_font(10.5) + extra_font_points,
+            "ytick.labelsize": publication_font(10.5) + extra_font_points,
+            "legend.fontsize": publication_font(9.5) + extra_font_points,
+            "figure.labelsize": publication_font(13.2) + extra_font_points,
             "axes.edgecolor": "black",
             "axes.linewidth": 1.0,
             "pdf.fonttype": 42,
@@ -693,7 +698,14 @@ def render_dataset_platforms(
     dpi: int,
 ) -> list[Path]:
     """Render one platform panel per dataset, with baseline zoom insets."""
-    configure_style()
+    # Keep this figure-specific adjustment out of the shared/all-dataset style.
+    extra_font_points = 16.0 if dataset.casefold() == "iemocap" and scale == "linear" else 0.0
+    extra_marker_points = 16.0 if extra_font_points else 0.0
+    tick_font_reduction = 2.0 if extra_font_points else 0.0
+    configure_style(extra_font_points)
+
+    def panel_font(previous_size: float) -> float:
+        return publication_font(previous_size) + extra_font_points
     panel_measurements = [
         measurement
         for measurement in measurements
@@ -719,7 +731,9 @@ def render_dataset_platforms(
     fig, axes = plt.subplots(
         1,
         len(platforms),
-        figsize=(4.10 * len(platforms), 3.90),
+        # Preserve the previous canvas width so larger type is visibly larger
+        # at a fixed manuscript width, rather than widening to fit the legend.
+        figsize=(18.6237, 8.80) if extra_font_points else (4.10 * len(platforms), 3.90),
         squeeze=False,
     )
 
@@ -744,6 +758,28 @@ def render_dataset_platforms(
             "AdaMML": (0.65, 0.10),
         },
     }
+    if extra_font_points:
+        # Stagger the enlarged labels instead of shrinking their type to fit.
+        annotation_positions = {
+            "GPU": {
+                "MBT": (0.33, 0.91),
+                "AdaMML": (0.33, 0.46),
+                "DyMM": (0.67, 0.10),
+                "DyMo": (0.67, 0.66),
+            },
+            "CPU": {
+                "DyMM": (0.33, 0.91),
+                "DyMo": (0.67, 0.53),
+                "MBT": (0.33, 0.33),
+                "AdaMML": (0.67, 0.10),
+            },
+            "Android (INT8)": {
+                "DyMo": (0.67, 0.92),
+                "MBT": (0.67, 0.79),
+                "DyMM": (0.67, 0.42),
+                "AdaMML": (0.67, 0.09),
+            },
+        }
 
     def draw_point(ax, measurement: Measurement, *, zoom: bool = False) -> None:
         color = METHOD_COLORS.get(measurement.method, "#666666")
@@ -753,7 +789,7 @@ def render_dataset_platforms(
             (13.8 if ours else 6.0)
             if zoom
             else (16.5 if ours else 8.8) * math.sqrt(MAIN_MARKER_AREA_SCALE)
-        )
+        ) + extra_marker_points
         ax.plot(
             measurement.latency_s,
             measurement.energy_j,
@@ -823,13 +859,13 @@ def render_dataset_platforms(
         ax.annotate(
             f1_label(f1_scores["SeMARC"]),
             xy=(semarc.latency_s, semarc.energy_j),
-            xytext=(6, 22),
-            textcoords="offset points",
-            ha="center",
+            xytext=(0.035, 0.66) if extra_font_points else (6, 22),
+            textcoords="axes fraction" if extra_font_points else "offset points",
+            ha="left" if extra_font_points else "center",
             va="center",
-            fontsize=publication_font(10.0),
+            fontsize=panel_font(10.0),
             color=METHOD_COLORS["SeMARC"],
-            arrowprops={
+            arrowprops=None if extra_font_points else {
                 "arrowstyle": "-",
                 "color": METHOD_COLORS["SeMARC"],
                 "linewidth": 0.55,
@@ -844,7 +880,9 @@ def render_dataset_platforms(
             for measurement in platform_values
             if measurement.method != "SeMARC"
         ]
-        zoom_ax = ax.inset_axes((0.37, 0.06, 0.60, 0.43))
+        zoom_ax = ax.inset_axes(
+            (0.33, 0.09, 0.64, 0.50) if extra_font_points else (0.37, 0.06, 0.60, 0.43)
+        )
         for measurement in competitors:
             draw_point(zoom_ax, measurement, zoom=True)
         set_axis_range(
@@ -861,6 +899,12 @@ def render_dataset_platforms(
             energy_padding = 0.25 * (energy_max - energy_min)
             if energy_padding > 0:
                 zoom_ax.set_ylim(energy_min - energy_padding, energy_max + energy_padding)
+                if extra_font_points:
+                    # Extra room below the large blue marker separates it
+                    # from its F1 label; the connector rectangle uses these
+                    # exact limits, so the zoom remains faithful.
+                    lower, upper = zoom_ax.get_ylim()
+                    zoom_ax.set_ylim(lower - 0.10 * (upper - lower), upper)
         positions = annotation_positions.get(platform, {})
         for measurement in competitors:
             color = METHOD_COLORS[measurement.method]
@@ -871,9 +915,9 @@ def render_dataset_platforms(
                 textcoords="axes fraction",
                 ha="center",
                 va="center",
-                fontsize=publication_font(8.2),
+                fontsize=panel_font(8.2),
                 color=color,
-                arrowprops={
+                arrowprops=None if extra_font_points else {
                     "arrowstyle": "-",
                     "color": color,
                     "linewidth": 0.45,
@@ -911,14 +955,18 @@ def render_dataset_platforms(
         zoom_ax.set_yticks(inset_y_ticks, [tick_text(value) for value in inset_y_ticks])
         zoom_ax.tick_params(
             axis="x", direction="out", length=2, width=0.45, pad=1.5,
-            labelsize=publication_font(6.2), colors="black",
+            labelsize=panel_font(6.2) - tick_font_reduction, colors="black",
         )
         zoom_ax.tick_params(
-            axis="y", direction="in", length=2, width=0.45, pad=-3,
-            labelsize=publication_font(6.2), colors="black",
+            axis="y", direction="out" if extra_font_points else "in",
+            length=2, width=0.45, pad=2 if extra_font_points else -3,
+            labelsize=panel_font(6.2) - tick_font_reduction, colors="black",
         )
         for label in zoom_ax.get_yticklabels():
-            label.set_horizontalalignment("left")
+            label.set_horizontalalignment("right" if extra_font_points else "left")
+        if extra_font_points:
+            # Keep the lowest inset tick clear of the enlarged SeMARC star.
+            zoom_ax.get_yticklabels()[0].set_verticalalignment("bottom")
         zoom_ax.grid(False)
         for spine in zoom_ax.spines.values():
             spine.set_color("black")
@@ -943,7 +991,14 @@ def render_dataset_platforms(
             which="major", direction="out", length=3.0, width=0.65, pad=2.0
         )
         ax.tick_params(which="minor", direction="out", length=1.8, width=0.45)
+        if extra_font_points:
+            ax.tick_params(
+                axis="both", which="both",
+                labelsize=panel_font(10.5) - tick_font_reduction,
+            )
         panel_label = f"({chr(ord('a') + panel_index)}) {platform}"
+        if extra_font_points and platform == "Android (INT8)":
+            panel_label = f"({chr(ord('a') + panel_index)}) Android\n(INT8)"
         ax.text(
             0.035,
             0.955,
@@ -951,7 +1006,7 @@ def render_dataset_platforms(
             transform=ax.transAxes,
             ha="left",
             va="top",
-            fontsize=publication_font(11.5),
+            fontsize=panel_font(11.5),
             color="black",
         )
         for spine in ax.spines.values():
@@ -967,15 +1022,18 @@ def render_dataset_platforms(
             markerfacecolor=METHOD_COLORS.get(method, "#666666"),
             markeredgecolor="white",
             markeredgewidth=0.8,
-            markersize=11.0 if method == "SeMARC" else 7.3,
-            label=METHOD_LABELS.get(method, method),
+            markersize=(11.0 if method == "SeMARC" else 7.3) + extra_marker_points,
+            label=(METHOD_LABELS.get(method, method).replace(" Fusion", "")
+                   if extra_font_points else METHOD_LABELS.get(method, method)),
         )
         for method in methods
     ]
     legend = fig.legend(
         handles=method_handles,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.995),
+        loc="lower left" if extra_font_points else "upper center",
+        bbox_to_anchor=(0.012, 0.775, 0.978, 0.1) if extra_font_points else (0.5, 0.995),
+        mode="expand" if extra_font_points else None,
+        borderaxespad=0.0 if extra_font_points else 0.5,
         ncol=len(method_handles),
         frameon=True,
         fancybox=False,
@@ -984,27 +1042,39 @@ def render_dataset_platforms(
         edgecolor="#B8B8B8",
         columnspacing=0.45,
         handlelength=0.65,
-        handletextpad=0.20,
+        handletextpad=0.15 if extra_font_points else 0.20,
         borderpad=0.20,
         labelspacing=0.35,
-        fontsize=publication_font(8.6),
+        fontsize=panel_font(8.6) - (2.0 if extra_font_points else 0.0),
     )
     legend.get_frame().set_linewidth(0.55)
 
     scale_suffix = ", log scale" if scale == "log" else ""
     fig.supxlabel(f"Latency per inference (s{scale_suffix})", y=0.012)
-    fig.supylabel(f"Energy per inference (J{scale_suffix})", x=0.012)
+    fig.supylabel(
+        f"Energy per inference (J{scale_suffix})", x=0.012,
+        y=0.45 if extra_font_points else 0.5,
+    )
     fig.subplots_adjust(
-        left=0.072,
+        left=0.105 if extra_font_points else 0.072,
         right=0.99,
         bottom=0.148,
-        top=0.88,
+        top=0.755 if extra_font_points else 0.88,
         wspace=0.20,
     )
+    if extra_font_points:
+        # Give CPU's four-digit y ticks more room without moving the other
+        # panels or changing the size of any plotting area.
+        first_ax = axes[0, 0]
+        position = first_ax.get_position()
+        first_ax.set_position(
+            [position.x0 - 0.020, position.y0, position.width, position.height]
+        )
+        first_ax.set_in_layout(True)
     # Keep the requested font sizes and complete model labels in one row.
     fig.canvas.draw()
     legend_width = legend.get_window_extent(fig.canvas.get_renderer()).width / fig.dpi
-    if legend_width + 0.30 > fig.get_figwidth():
+    if not extra_font_points and legend_width + 0.30 > fig.get_figwidth():
         fig.set_size_inches(legend_width + 0.30, fig.get_figheight())
 
     paths = save_figure(fig, output_dir, stem, dpi)
@@ -1021,17 +1091,26 @@ def output_stem(dataset: str, scale: str) -> str:
 
 def main() -> None:
     args = parse_args()
-    book = load_workbook(args.input)
-    measurements, empty_blocks, incomplete_pairs = read_measurements(
-        book, args.sheet
-    )
+    if args.snapshot is not None:
+        snapshot = json.loads(args.snapshot.read_text(encoding="utf-8"))
+        if snapshot["dataset"].casefold() != args.dataset.casefold():
+            raise ValueError("Snapshot dataset must match --dataset.")
+        measurements = [Measurement(**row) for row in snapshot["measurements"]]
+        f1_scores = snapshot["f1_scores"]
+        empty_blocks, incomplete_pairs = [], []
+    else:
+        book = load_workbook(args.input)
+        measurements, empty_blocks, incomplete_pairs = read_measurements(
+            book, args.sheet
+        )
     stem = args.stem or output_stem(args.dataset, args.scale)
     if args.dataset.casefold() == "all":
         paths = render(measurements, args.output_dir, stem, args.dpi)
     else:
-        f1_scores = read_f1_scores(
-            book, args.results_sheet, args.dataset
-        )
+        if args.snapshot is None:
+            f1_scores = read_f1_scores(
+                book, args.results_sheet, args.dataset
+            )
         paths = render_dataset_platforms(
             measurements,
             args.dataset,

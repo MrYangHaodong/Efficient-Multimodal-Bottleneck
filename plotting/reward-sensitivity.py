@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
-"""Publication-style side-by-side reward sensitivity sweeps.
+"""Publication-style modality-weighting sensitivity at fixed lambda=0.5.
 
 Source: the user's supplied penalty sweep, weight sweep, modality-penalty table,
 and deployed-controller reference. All values below are preserved as supplied;
 this script does not download data, train a policy, or infer missing uncertainty.
 
-Default: purple Macro-F1 bars with +/-1 SD and orange latency bars. The two
-panels share identical F1 and latency scales, with units on the outer axes.
-Dashed/dotted lines show the supplied deployed-controller references.
+Default: one compact panel with purple Macro-F1 bars (+/-1 SD) and orange
+latency bars. It contains all seven gamma-sweep rows supplied on 2026-09-21.
+No title, black boxed axes, a light one-row legend, and zero-based bar axes.
+The default 4.5 x 3.2 inch export matches class selection (2700 x 1920 pixels
+at 600 dpi). With the 6.0 x 3.2 inch cascade between them, all three have equal
+displayed heights in a 30% / 40% / 30% manuscript row.
+The separate deployed-controller references are omitted from this sweep view.
 Use --secondary mu, gflops, or none for another view of the same measurements.
+Use --sweep both to reproduce the older two-panel figure for appendix work;
+that legacy penalty panel contains only the earlier uniform-cost measurements.
 
 Important: lambda=0.5, gamma=0 has different results in the two studies. The
 weight-sweep uniform control is NOT replaced with the deployed reference.
 SD is descriptive standard deviation, not a confidence interval. Latency SD
-and sample counts were not supplied. Nonuniform allocation retains total cost
-0.5; the complete supplied allocation table is retained and validated below.
+and gamma-sweep sample counts were not supplied. The old normalized penalty
+allocation table is retained for provenance only: the newer raw modality
+weights do NOT sum to one, and no normalization formula is inferred here.
+The gamma=0.75 sweep point is labeled deployed in the Gamma CSV, but is not
+merged with the separate Lambda CSV deployed record (fold-specific lambdas).
 
 Examples:
     python plotting/reward-sensitivity.py
-    python plotting/reward-sensitivity.py --secondary mu --stem reward_sensitivity_mu
+    python plotting/reward-sensitivity.py --secondary mu --stem weight_sensitivity_mu
+    python plotting/reward-sensitivity.py --sweep both
 
-Dependencies: matplotlib, numpy. Outputs: reward_sensitivity.pdf and .png
+Dependencies: matplotlib, numpy. Outputs: modality_weight_sensitivity_iemocap.pdf and .png
 beside this script, unless --output-dir or --stem is supplied.
 """
 from __future__ import annotations
@@ -74,6 +84,7 @@ WEIGHT_SWEEP = (
 )
 
 MODALITIES = ('Video', 'Audio', 'Text', 'Hand', 'Head', 'Rotation')
+# LEGACY input from the earlier request, not the newer unnormalized raw weights.
 # gamma, lambda, penalties in MODALITIES order, supplied total penalty.
 PENALTY_ALLOCATIONS = (
     (0, 0.5, (0.08333333, 0.08333333, 0.08333333, 0.08333333, 0.08333333, 0.08333333), 0.5),
@@ -113,15 +124,26 @@ def validate_data() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--sweep', choices=('weights', 'both'), default='weights',
+                        help='Weights only (default), or the older two-panel appendix view.')
     parser.add_argument('--secondary', choices=('latency', 'mu', 'gflops', 'none'),
                         default='latency', help='Metric for orange bars (default: latency).')
     parser.add_argument('--output-dir', type=Path, default=HERE)
-    parser.add_argument('--stem', default='reward_sensitivity')
-    parser.add_argument('--width-inches', type=float, default=6.8)
-    parser.add_argument('--height-inches', type=float, default=2.6)
-    parser.add_argument('--font-size', type=float, default=8)
+    parser.add_argument('--stem', default=None)
+    parser.add_argument('--width-inches', type=float, default=None)
+    parser.add_argument('--height-inches', type=float, default=None)
+    parser.add_argument('--font-size', type=float, default=None)
     parser.add_argument('--dpi', type=int, default=600)
     args = parser.parse_args()
+    weights_only = args.sweep == 'weights'
+    if args.stem is None:
+        args.stem = 'modality_weight_sensitivity_iemocap' if weights_only else 'reward_sensitivity'
+    defaults = {'width_inches': 4.5 if weights_only else 6.8,
+                'height_inches': 3.2 if weights_only else 2.6,
+                'font_size': 12 if weights_only else 8}
+    for name, value in defaults.items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
     for name in ('width_inches', 'height_inches', 'font_size', 'dpi'):
         value = getattr(args, name)
         if not np.isfinite(value) or value <= 0:
@@ -137,6 +159,76 @@ def secondary_spec(name: str):
         'mu': ('mu', 'Modality usage', 1.0, [0, 0.25, 0.5, 0.75, 1.0]),
         'gflops': ('gflops', 'GFLOPs', 0.4, [0, 0.1, 0.2, 0.3, 0.4]),
     }[name]
+
+
+def build_weight_figure(secondary='latency', width=4.5, height=3.2, font_size=12):
+    """Single-panel gamma sweep; separate deployed records are not substituted."""
+    validate_data()
+    plt.rcParams.update({
+        'font.family': 'DejaVu Sans', 'font.size': font_size,
+        'mathtext.fontset': 'dejavusans', 'axes.labelsize': font_size,
+        'xtick.labelsize': font_size - 1, 'ytick.labelsize': font_size - 1,
+        'axes.edgecolor': 'black', 'axes.linewidth': 0.8,
+        'text.color': 'black', 'axes.labelcolor': 'black',
+        'xtick.color': 'black', 'ytick.color': 'black',
+        'pdf.fonttype': 42, 'ps.fonttype': 42, 'svg.fonttype': 'none',
+        'figure.facecolor': 'white', 'savefig.facecolor': 'white',
+    })
+    fig, ax = plt.subplots(figsize=(width, height))
+    rows = WEIGHT_SWEEP
+    x = np.arange(len(rows))
+    paired = secondary != 'none'
+    f1_bars = ax.bar(
+        x - 0.18 if paired else x, [row.macro_f1 for row in rows],
+        width=0.34 if paired else 0.62, color=PURPLE,
+        yerr=[row.f1_sd for row in rows], capsize=2.2, zorder=3,
+        error_kw={'ecolor': 'black', 'elinewidth': 0.85, 'capthick': 0.85},
+    )
+    ax.set_ylim(0, 0.75)
+    ax.set_yticks([0, 0.2, 0.4, 0.6])
+    ax.set_ylabel('Macro-F1', labelpad=3)
+    # These are discrete tested configurations; spacing is categorical.
+    ax.set_xlim(-0.55, len(rows) - 0.45)
+    ax.set_xticks(x, [f'{row.gamma:g}' for row in rows])
+    ax.set_xlabel(r'Modality weighting, $\gamma$ ($\lambda = 0.5$)', labelpad=4)
+    ax.set_axisbelow(True)
+    ax.grid(axis='y', color='#E6E6E6', linewidth=0.45)
+    ax.tick_params(direction='out', length=2.6, width=0.7, pad=2)
+    handles = [Patch(facecolor=PURPLE, label='Macro-F1 (±1 SD)')]
+    other_bars = None
+    other_axes = []
+    if paired:
+        field, ylabel, ymax, ticks = secondary_spec(secondary)
+        if secondary == 'latency':
+            ymax, ticks = 700, [0, 200, 400, 600]
+        other = ax.twinx()
+        other_bars = other.bar(
+            x + 0.18, [getattr(row, field) for row in rows], width=0.34,
+            color=ORANGE, zorder=2,
+        )
+        other.set_ylim(0, ymax)
+        other.set_yticks(ticks)
+        other.set_ylabel(ylabel, labelpad=4)
+        other.tick_params(direction='out', length=2.6, width=0.7, pad=2)
+        other_axes.append(other)
+        handles.append(Patch(facecolor=ORANGE, label=ylabel))
+    for axis in (ax, *other_axes):
+        for spine in axis.spines.values():
+            spine.set_visible(True)
+            spine.set_color('black')
+            spine.set_linewidth(0.8)
+    legend = fig.legend(
+        handles=handles, ncol=len(handles), loc='upper center',
+        bbox_to_anchor=(0.5, 1 - 0.035 / height), borderaxespad=0,
+        fontsize=font_size - 1, frameon=True, fancybox=False,
+        facecolor='#FAFAFA', edgecolor='#CBCBCB', framealpha=1,
+        columnspacing=1.0, handlelength=1.2, handletextpad=0.4, borderpad=0.3,
+    )
+    legend.get_frame().set_linewidth(0.55)
+    fig.subplots_adjust(left=0.58 / width,
+                        right=1 - (0.70 if paired else 0.08) / width,
+                        bottom=0.49 / height, top=1 - 0.36 / height)
+    return fig, [ax], other_axes, [(rows, f1_bars, other_bars)]
 
 
 def build_figure(secondary='latency', width=6.8, height=2.6, font_size=8):
@@ -237,6 +329,15 @@ def validate_figure(fig, metadata, secondary):
     for rows, f1_bars, other_bars in metadata:
         np.testing.assert_array_equal([bar.get_height() for bar in f1_bars],
                                       [row.macro_f1 for row in rows])
+        ax = f1_bars[0].axes
+        lo, hi = ax.get_ylim()
+        if lo > 0 or any(row.macro_f1 - row.f1_sd < lo or
+                         row.macro_f1 + row.f1_sd > hi for row in rows):
+            raise ValueError('The zero bar baseline and full F1 error bars must be visible.')
+        segments = f1_bars.errorbar.lines[2][0].get_segments()
+        np.testing.assert_allclose(
+            [[segment[0, 1], segment[1, 1]] for segment in segments],
+            [[row.macro_f1 - row.f1_sd, row.macro_f1 + row.f1_sd] for row in rows])
         if secondary != 'none':
             field = secondary_spec(secondary)[0]
             np.testing.assert_array_equal([bar.get_height() for bar in other_bars],
@@ -256,11 +357,13 @@ def validate_figure(fig, metadata, secondary):
 
 def main():
     args = parse_args()
-    fig, axes, other_axes, metadata = build_figure(
+    builder = build_weight_figure if args.sweep == 'weights' else build_figure
+    fig, axes, other_axes, metadata = builder(
         args.secondary, args.width_inches, args.height_inches, args.font_size)
     try:
-        fig.set_dpi(args.dpi)
-        validate_figure(fig, metadata, args.secondary)
+        for dpi in (100, args.dpi):
+            fig.set_dpi(dpi)
+            validate_figure(fig, metadata, args.secondary)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         for suffix in ('pdf', 'png'):
             path = args.output_dir / f'{args.stem}.{suffix}'
@@ -268,7 +371,7 @@ def main():
             print(f'Wrote {path.resolve()}')
     finally:
         plt.close(fig)
-    print('All 13 measurements and 7 penalty allocations retained exactly as supplied.')
+    print(f'Plotted {sum(len(rows) for rows, _, _ in metadata)} supplied measurements.')
     print('Error bars: ±1 SD for Macro-F1 only; no latency uncertainty was supplied.')
     print('NOTE: uniform controls differ across studies; no cross-study equivalence is assumed.')
 

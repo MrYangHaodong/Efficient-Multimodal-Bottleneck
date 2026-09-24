@@ -21,10 +21,16 @@ All bars use the paper's Macro-F1 purple. A dotted divider separates ARC (RL)
 from SeMA (backbone); plain Times New Roman labels sit inside their sections.
 Category labels appear above the plot. Times New Roman must be installed;
 the script refuses a silent font substitution.
-Axis text is enlarged by another 4 points: ticks 22 pt and the axis label
-25.5 pt; values/group labels remain 19.5 pt. Display rounding never changes
-bar heights. Unequal category spacing fits the exact two-line
-labels without shrinking, rotating, or adding line breaks to their text.
+All text is enlarged by another 4 points: ticks 36 pt and the axis label
+39.5 pt; values/group labels are 27.5 pt. Display rounding never changes
+bar heights. Top labels use one row tilted 45 degrees, with compact 0.95 line
+spacing for multiline labels. The y-axis title uses 1.0 line
+spacing and wraps onto two lines. The 16.15-inch width is retained, with an
+8.8-inch working height to fit the larger text and complete mask expression;
+there are no staggered label levels or guide lines.
+All three exports are cropped to the visible content with a 1.5-point safety
+margin for vector-backend font metrics. Cropping does not rescale fonts or the plot;
+PDF and SVG retain vector graphics.
 
 Run: python plotting/plot_ablation.py
 Updates the same ablation_iemocap.pdf, .svg, and .png beside this script.
@@ -41,10 +47,12 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.colors import to_rgba
 from matplotlib.font_manager import FontProperties, findfont
 from matplotlib.text import Text
 from matplotlib.ticker import PercentFormatter
+from matplotlib.transforms import Affine2D, Bbox
 
 
 HERE = Path(__file__).resolve().parent
@@ -54,10 +62,15 @@ BAR_COLOR = "#AA4499"
 FILL_ALPHA = 0.75
 GROUP_FONT = "Times New Roman"
 GROUP_DIVIDER = 8.0
-X_POSITIONS = (0.0, 2.09, 3.86, 6.35, 9.03, 10.83, 12.62)
+X_POSITIONS = (0.0, 2.09, 3.86, 6.35, 8.99, 10.84, 12.69)
 DEFAULT_WIDTH = 16.15
-DEFAULT_HEIGHT = 6.45
-DEFAULT_FONT_SIZE = 20.0
+DEFAULT_HEIGHT = 8.8
+DEFAULT_FONT_SIZE = 28.0
+EXPORT_PAD_PT = 1.5
+LABEL_PAD = 7
+LABEL_ROTATION = 45
+CATEGORY_LINE_SPACING = 0.95
+AXIS_TITLE_LINE_SPACING = 1.0
 
 
 @dataclass(frozen=True)
@@ -73,17 +86,17 @@ class Ablation:
 
 
 ABLATIONS = (
-    Ablation("RL", "Heuristic policy\n(no RL)",
+    Ablation("RL", "Heuristic\n(no RL)",
              "No RL: Shapley ordering + 80% confidence exit", Decimal("0.6443")),
     Ablation("RL", "No Q-prior\n" + r"($Q_0=0$)",
              "v(s) zero-initialized", Decimal("0.6173")),
-    Ablation("RL", "Masks-only\nstate",
+    Ablation("RL", r"$[\mathbf{1}_{S_s}\Vert\mathbf{1}_{\mathcal{A}}]$ only" + "\n(state)",
              "RL state: masks only", Decimal("0.6447")),
-    Ablation("RL", "Predictive-summary\nstate only",
+    Ablation("RL", r"$p_s$ only" + "\n(state)",
              "RL state: p_s derivatives only", Decimal("0.6651")),
     Ablation("Backbone", "Fixed-order\ntraining",
              "No random-order training", Decimal("0.6406")),
-    Ablation("Backbone", "Bottleneck\ntokens last",
+    Ablation("Backbone", "Bottleneck\nsuffix",
              "Bottleneck position", Decimal("0.6463")),
     Ablation("Backbone", "Final-prefix\nCE only",
              "Only CE loss", Decimal("0.6491")),
@@ -128,8 +141,8 @@ def build_figure(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, font_size=DEFAULT_F
     findfont(FontProperties(family=GROUP_FONT), fallback_to_default=False)
     plt.rcParams.update({
         "font.family": "DejaVu Sans", "font.size": font_size,
-        "mathtext.fontset": "dejavusans", "axes.labelsize": font_size + 5.5,
-        "xtick.labelsize": font_size + 2, "ytick.labelsize": font_size + 2,
+        "mathtext.fontset": "dejavusans", "axes.labelsize": font_size + 11.5,
+        "xtick.labelsize": font_size + 8, "ytick.labelsize": font_size + 8,
         "axes.edgecolor": "black", "axes.linewidth": 0.8,
         "text.color": "black", "axes.labelcolor": "black",
         "xtick.color": "black", "ytick.color": "black",
@@ -152,21 +165,27 @@ def build_figure(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, font_size=DEFAULT_F
                     bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.92,
                           "pad": 0.3})
 
-    ax.set_xlim(-1.23, 13.5)
+    ax.set_xlim(-1.23, 14.7)
     ax.set_ylim(-9.25, 0)
     ax.set_xticks(x, [row.label for row in ABLATIONS])
     ax.set_yticks([-8, -6, -4, -2, 0])
     ax.yaxis.set_major_formatter(PercentFormatter(xmax=100, decimals=0))
-    ax.set_ylabel("Relative Macro-F1 change (%)", labelpad=6)
+    ax.set_ylabel("Relative Macro-F1\nchange (%)", labelpad=6,
+                  linespacing=AXIS_TITLE_LINE_SPACING)
     ax.grid(axis="y", color="#D0D0D0", linestyle="--", linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
     ax.xaxis.tick_top()
     ax.xaxis.set_label_position("top")
-    ax.tick_params(axis="x", length=0, pad=7, top=True, labeltop=True,
+    ax.tick_params(axis="x", length=0, pad=LABEL_PAD, top=True, labeltop=True,
                    bottom=False, labelbottom=False)
     ax.tick_params(axis="y", direction="out", length=3, width=0.65, pad=3)
     for label in ax.get_xticklabels():
-        label.set_linespacing(1.15)
+        label.set_linespacing(CATEGORY_LINE_SPACING)
+        label.set_rotation(LABEL_ROTATION)
+        label.set_rotation_mode("anchor")
+        label.set_ha("left")
+        label.set_va("bottom")
+        label.set_multialignment("left")
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color("black")
@@ -178,9 +197,44 @@ def build_figure(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, font_size=DEFAULT_F
         ax.text(right_edge, 0.07, group, transform=ax.get_xaxis_transform(),
                 ha="right", va="bottom", fontsize=font_size - 0.5,
                 fontfamily=GROUP_FONT, color="black")
-    fig.subplots_adjust(left=1.3 / width, right=1 - 0.12 / width,
-                        bottom=0.12 / height, top=1 - 1.04 / height)
+    fig.subplots_adjust(left=2.55 / width, right=1 - 0.35 / width,
+                        bottom=0.2 / height, top=1 - 3.3 / height)
     return fig, ax, bars
+
+
+def text_outline(text, renderer):
+    """Return the actual rotated text rectangle, not its axis-aligned envelope."""
+    rotation = text.get_rotation()
+    if rotation % 90 == 0:
+        box = text.get_window_extent(renderer)
+        return [(box.x0, box.y0), (box.x1, box.y0),
+                (box.x1, box.y1), (box.x0, box.y1)]
+    if text.get_rotation_mode() != "anchor":
+        raise ValueError("Tilted labels must rotate around their text anchor")
+    try:
+        text.set_rotation(0)
+        box = text.get_window_extent(renderer)
+    finally:
+        text.set_rotation(rotation)
+    anchor = text.get_transform().transform(text.get_unitless_position())
+    return Affine2D().rotate_deg_around(*anchor, rotation).transform(
+        [(box.x0, box.y0), (box.x1, box.y0),
+         (box.x1, box.y1), (box.x0, box.y1)]
+    )
+
+
+def outlines_overlap(first, second):
+    """Separating-axis test avoids false collisions between tilted labels."""
+    for polygon in (first, second):
+        for index, start in enumerate(polygon):
+            end = polygon[(index + 1) % len(polygon)]
+            normal = (start[1] - end[1], end[0] - start[0])
+            projections = [[x * normal[0] + y * normal[1] for x, y in shape]
+                           for shape in (first, second)]
+            left, right = projections
+            if max(left) <= min(right) or max(right) <= min(left):
+                return False
+    return True
 
 
 def validate_figure(fig, ax, bars, font_size=DEFAULT_FONT_SIZE) -> None:
@@ -210,25 +264,63 @@ def validate_figure(fig, ax, bars, font_size=DEFAULT_FONT_SIZE) -> None:
         raise ValueError("Category labels must appear only above the plot")
     if [label.get_text() for label in ax.get_xticklabels()] != [row.label for row in ABLATIONS]:
         raise ValueError("Category labels must preserve the requested text and order")
+    if any(tick.get_pad() != LABEL_PAD for tick in ax.xaxis.get_major_ticks()):
+        raise ValueError("Category labels must share one top level")
+    if any(label.get_rotation() != LABEL_ROTATION
+           or label.get_rotation_mode() != "anchor"
+           or label.get_ha() != "left" or label.get_va() != "bottom"
+           for label in ax.get_xticklabels()):
+        raise ValueError("Category labels must use the requested 45-degree tilt")
+    if ax.collections:
+        raise ValueError("The compact layout must not retain staggered-label guides")
     for label in (*ax.get_xticklabels(), *ax.get_yticklabels()):
-        if label.get_fontsize() != font_size + 2:
+        if label.get_fontsize() != font_size + 8:
             raise ValueError("Tick labels have an unexpected font size")
-    if ax.yaxis.label.get_fontsize() != font_size + 5.5:
+    if ax.yaxis.label.get_fontsize() != font_size + 11.5:
         raise ValueError("Axis label has an unexpected font size")
     if any(label.get_fontsize() != font_size - 0.5 for label in ax.texts):
         raise ValueError("Value/group labels have an unexpected font size")
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
+    # Enlarged endpoint labels must stay inside the plot, not erase its border.
+    for label in ax.texts[:7]:
+        box = label.get_window_extent(renderer)
+        padding = 0.3 * fig.dpi / 72
+        if box.y0 - padding < ax.bbox.y0 or box.y1 + padding > ax.bbox.y1:
+            raise ValueError(f"Endpoint label crosses the plot border: {label.get_text()!r}")
     texts = [text for text in fig.findobj(Text) if text.get_visible() and text.get_text()]
     boxes = [text.get_window_extent(renderer) for text in texts]
+    outlines = [text_outline(text, renderer) for text in texts]
     for text, box in zip(texts, boxes):
         if box.x0 < -0.5 or box.y0 < -0.5 or box.x1 > fig.bbox.width + 0.5 or box.y1 > fig.bbox.height + 0.5:
             raise ValueError(f"Clipped label {text.get_text()!r}; increase figure size")
-    for index, left in enumerate(boxes):
-        for other_index in range(index + 1, len(boxes)):
-            if left.overlaps(boxes[other_index]):
+    for index, left in enumerate(outlines):
+        for other_index in range(index + 1, len(outlines)):
+            if outlines_overlap(left, outlines[other_index]):
                 raise ValueError(f"Overlapping labels: {texts[index].get_text()!r}, "
                                  f"{texts[other_index].get_text()!r}")
+
+
+def tight_export_bbox(fig):
+    """Remove blank margins while including rotated glyphs and complete strokes.
+
+    Measure rendered ink, not the extra font-descent space in text layout boxes.
+    The vector exports use the same measured page boundary, not a raster image.
+    Keep a small point-based margin for antialiasing and vector-font differences.
+    """
+    fig.canvas.draw()
+    rgba = np.asarray(fig.canvas.buffer_rgba())
+    ink = np.any(rgba[:, :, :3] < 255, axis=2) & (rgba[:, :, 3] > 0)
+    # Axis reductions avoid allocating a coordinate pair for every ink pixel.
+    xs = np.flatnonzero(ink.any(axis=0))
+    ys = np.flatnonzero(ink.any(axis=1))
+    if not len(xs):
+        raise ValueError("Cannot crop an empty figure")
+    height = rgba.shape[0]
+    padding = EXPORT_PAD_PT / 72
+    return Bbox.from_extents(
+        xs[0] / fig.dpi - padding, (height - ys[-1] - 1) / fig.dpi - padding,
+        (xs[-1] + 1) / fig.dpi + padding, (height - ys[0]) / fig.dpi + padding)
 
 
 def main() -> None:
@@ -238,10 +330,11 @@ def main() -> None:
         for dpi in (100, args.dpi):
             fig.set_dpi(dpi)
             validate_figure(fig, ax, bars, args.font_size)
+        export_bbox = tight_export_bbox(fig)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         for extension in ("pdf", "svg", "png"):
             path = args.output_dir / f"{STEM}.{extension}"
-            fig.savefig(path, dpi=args.dpi, bbox_inches=None, pad_inches=0)
+            fig.savefig(path, dpi=args.dpi, bbox_inches=export_bbox, pad_inches=0)
             print(f"Created {path.resolve()}")
     finally:
         plt.close(fig)
